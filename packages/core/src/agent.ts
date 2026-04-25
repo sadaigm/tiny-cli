@@ -106,4 +106,8 @@ export class Agent {
   getMessages() {
     return this.messages;
   }
+
+  getToolDefinitions() {
+    return this.registry.getDefinitions();
+  }
 }

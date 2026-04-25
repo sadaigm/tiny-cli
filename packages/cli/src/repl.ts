@@ -27,6 +27,16 @@ export async function startRepl() {
       process.exit(0);
     }
 
+    if (input.toLowerCase() === '/tools') {
+      const tools = agent.getToolDefinitions();
+      console.log(chalk.cyan('\nAvailable Tools:'));
+      tools.forEach(tool => {
+        console.log(`${chalk.yellow(tool.name)}: ${tool.description}`);
+      });
+      console.log('');
+      continue;
+    }
+
     const spinner = ora('Thinking...').start();
 
     try {

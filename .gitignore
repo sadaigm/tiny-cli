@@ -8,7 +8,7 @@ dist
 build
 logs
 .DS_Store
-context.md
-design.md
-full_impl.md
-tools.md
+# context.md
+# design.md
+# full_impl.md
+# tools.md

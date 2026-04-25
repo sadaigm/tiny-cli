@@ -1,13 +1,14 @@
 import { exec } from 'child_process';
 import { readFile, writeFile, readdir } from 'fs/promises';
+import path from 'path';
 import { ToolDefinition } from '../types.js';
 import { ToolRegistry } from './registry.js';
 
 export function registerDefaultTools(registry: ToolRegistry) {
-  // runCommand
-  const runCommandDef: ToolDefinition = {
-    name: 'runCommand',
-    description: 'Execute a shell command.',
+  // bash
+  const bashDef: ToolDefinition = {
+    name: 'bash',
+    description: 'Execute a shell command in your environment.',
     parameters: {
       type: 'object',
       properties: {
@@ -16,30 +17,25 @@ export function registerDefaultTools(registry: ToolRegistry) {
       required: ['cmd']
     }
   };
-  // registry.register(runCommandDef, async (args) => {
-  //   let command = args.cmd;
-  //   // Guard: model passed schema object instead of a string value
-  //   if (typeof command !== 'string') {
-  //     if (Array.isArray(command)) {
-  //       command = command.join(' ');
-  //     } else {
-  //       return 'Tool error: cmd must be a shell command string, not an object.';
-  //     }
-  //   }
-  //   return new Promise((resolve) => {
-  //     exec(command as string, (err, stdout, stderr) => {
-  //       if (err) {
-  //         resolve(`Error: ${err.message}\n${stderr}`);
-  //       } else {
-  //         resolve(stdout || stderr || 'Command executed successfully (no output).');
-  //       }
-  //     });
-  //   });
-  // });
+  registry.register(bashDef, async (args) => {
+    let command = args.cmd;
+    if (typeof command !== 'string') {
+      return 'Tool error: cmd must be a shell command string.';
+    }
+    return new Promise((resolve) => {
+      exec(command as string, (err, stdout, stderr) => {
+        if (err) {
+          resolve(`Error: ${err.message}\n${stderr}`);
+        } else {
+          resolve(stdout || stderr || 'Command executed successfully (no output).');
+        }
+      });
+    });
+  });
 
-  // readFile
-  const readFileDef: ToolDefinition = {
-    name: 'readFile',
+  // read
+  const readDef: ToolDefinition = {
+    name: 'read',
     description: 'Read the contents of a file.',
     parameters: {
       type: 'object',
@@ -49,14 +45,15 @@ export function registerDefaultTools(registry: ToolRegistry) {
       required: ['path']
     }
   };
-  registry.register(readFileDef, async (args) => {
-    return await readFile(args.path, 'utf-8');
+  registry.register(readDef, async (args) => {
+    const fullPath = path.resolve(process.cwd(), args.path);
+    return await readFile(fullPath, 'utf-8');
   });
 
-  // writeFile
-  const writeFileDef: ToolDefinition = {
-    name: 'writeFile',
-    description: 'Write content to a file.',
+  // write
+  const writeDef: ToolDefinition = {
+    name: 'write',
+    description: 'Create or overwrite a file with specific content.',
     parameters: {
       type: 'object',
       properties: {
@@ -66,15 +63,16 @@ export function registerDefaultTools(registry: ToolRegistry) {
       required: ['path', 'content']
     }
   };
-  registry.register(writeFileDef, async (args) => {
-    await writeFile(args.path, args.content, 'utf-8');
+  registry.register(writeDef, async (args) => {
+    const fullPath = path.resolve(process.cwd(), args.path);
+    await writeFile(fullPath, args.content, 'utf-8');
     return `Successfully wrote to ${args.path}`;
   });
 
-  // listDir
-  const listDirDef: ToolDefinition = {
-    name: 'listDir',
-    description: 'List contents of a directory. use this tool only when analyzing the file structure of a directory.',
+  // list
+  const listDef: ToolDefinition = {
+    name: 'list',
+    description: 'List contents of a directory.',
     parameters: {
       type: 'object',
       properties: {
@@ -83,8 +81,59 @@ export function registerDefaultTools(registry: ToolRegistry) {
       required: ['path']
     }
   };
-  registry.register(listDirDef, async (args) => {
-    const files = await readdir(args.path, { withFileTypes: true });
+  registry.register(listDef, async (args) => {
+    const fullPath = path.resolve(process.cwd(), args.path);
+    const files = await readdir(fullPath, { withFileTypes: true });
     return files.map(f => `${f.isDirectory() ? '[DIR] ' : '[FILE] '}${f.name}`).join('\n');
+  });
+
+  // grep
+  const grepDef: ToolDefinition = {
+    name: 'grep',
+    description: 'Searches for patterns in file contents.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'The pattern to search for' },
+        path: { type: 'string', description: 'The file or directory to search in' }
+      },
+      required: ['pattern', 'path']
+    }
+  };
+  registry.register(grepDef, async (args) => {
+    const fullPath = path.resolve(process.cwd(), args.path);
+    return new Promise((resolve) => {
+      exec(`grep -rIn "${args.pattern}" "${fullPath}"`, (err, stdout, stderr) => {
+        if (err && !stdout) {
+          resolve(`No matches found or Error: ${err.message}`);
+        } else {
+          resolve(stdout || 'No matches found.');
+        }
+      });
+    });
+  });
+
+  // glob
+  const globDef: ToolDefinition = {
+    name: 'glob',
+    description: 'Finds files based on pattern matching.',
+    parameters: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'The glob pattern (e.g. src/**/*.ts)' }
+      },
+      required: ['pattern']
+    }
+  };
+  registry.register(globDef, async (args) => {
+    return new Promise((resolve) => {
+      exec(`bash -c "ls -1 ${args.pattern}"`, (err, stdout, stderr) => {
+        if (err && !stdout) {
+          resolve(`No files found or Error: ${err.message}`);
+        } else {
+          resolve(stdout || 'No files found.');
+        }
+      });
+    });
   });
 }
