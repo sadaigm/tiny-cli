@@ -51,7 +51,7 @@ program
             }
           }
           spinner.start(chalk.cyan('Agent thinking...'));
-        }, 'chat', true); // Use continueSession: true to respect history
+        }, 'agent', true); // Use continueSession: true to respect history
 
         spinner.succeed(chalk.green('Task completed'));
         console.log(`\n - ${chalk.blue(response.content)}\n`);

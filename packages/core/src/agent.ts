@@ -9,6 +9,7 @@ import { ModelClient } from "./model/client.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { registerDefaultTools } from "./tools/definitions.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./prompts/default.js";
+import { AGENT_SYSTEM_PROMPT } from "./prompts/agent.js";
 import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
 import { getEncoding, type Tiktoken } from "js-tiktoken";
 
@@ -36,7 +37,7 @@ export class Agent {
   async run(
     userInput: string,
     onStep?: (step: AgentStep) => void,
-    mode: 'chat' | 'plan' = 'chat',
+    mode: 'agent' | 'chat' | 'plan' = 'agent',
     continueSession: boolean = false
   ): Promise<AgentResponse> {
     if (!continueSession || this.messages.length === 0) {
@@ -47,7 +48,14 @@ export class Agent {
           this.messages = [];
         }
         
-        let systemPrompt = mode === 'plan' ? PLANNING_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT;
+        let systemPrompt: string;
+        if (mode === 'plan') {
+          systemPrompt = PLANNING_SYSTEM_PROMPT;
+        } else if (mode === 'chat') {
+          systemPrompt = DEFAULT_SYSTEM_PROMPT;
+        } else {
+          systemPrompt = AGENT_SYSTEM_PROMPT;
+        }
 
         // Replace template variables
         systemPrompt = systemPrompt
@@ -80,9 +88,14 @@ export class Agent {
 
       let toolDefinitions = shouldSendTools ? this.registry.getDefinitions() : undefined;
       
-      // In plan mode, filter out 'write' tool
-      if (mode === 'plan' && toolDefinitions) {
-        toolDefinitions = toolDefinitions.filter(d => d.name !== 'write');
+      // Filter tools based on mode
+      if (toolDefinitions) {
+        if (mode === 'plan') {
+          toolDefinitions = toolDefinitions.filter(d => d.name !== 'write');
+        } else if (mode === 'chat') {
+          const allowedTools = ['read', 'list', 'grep'];
+          toolDefinitions = toolDefinitions.filter(d => allowedTools.includes(d.name));
+        }
       }
 
       const response = await this.model.chat(
@@ -137,8 +150,17 @@ export class Agent {
     return this.messages;
   }
 
-  getToolDefinitions() {
-    return this.registry.getDefinitions();
+  getToolDefinitions(mode?: 'agent' | 'chat' | 'plan') {
+    let definitions = this.registry.getDefinitions();
+    
+    if (mode === 'plan') {
+      definitions = definitions.filter(d => d.name !== 'write');
+    } else if (mode === 'chat') {
+      const allowedTools = ['read', 'list', 'grep'];
+      definitions = definitions.filter(d => allowedTools.includes(d.name));
+    }
+    
+    return definitions;
   }
 
   getContextStats() {

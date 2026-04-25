@@ -39,7 +39,7 @@ export async function startRepl(resumeId?: string) {
   console.log(chalk.dim(`Model: ${config.model} @ ${config.endpoint}`));
   console.log(chalk.dim(`Session: ${currentSessionId}\n`));
 
-  let currentMode: 'chat' | 'plan' = 'chat';
+  let currentMode: 'agent' | 'chat' | 'plan' = 'agent';
 
   while (true) {
     const stats = agent.getContextStats();
@@ -52,7 +52,7 @@ export async function startRepl(resumeId?: string) {
       {
         type: 'input',
         name: 'input',
-        message: chalk.green(currentMode === 'plan' ? `(plan:${currentSessionId}) ❯` : `(${currentSessionId}) ❯`),
+        message: chalk.green(`(${currentMode}:${currentSessionId}) ❯`),
         prefix: ''
       }
     ]);
@@ -75,12 +75,19 @@ export async function startRepl(resumeId?: string) {
     if (input.toLowerCase() === '/chat') {
       currentMode = 'chat';
       console.log(chalk.bold.cyan('\nChat mode ON'));
-      console.log(chalk.dim('Standard conversational mode.\n'));
+      console.log(chalk.dim('Conversational mode. Tool use is restricted.\n'));
+      continue;
+    }
+
+    if (input.toLowerCase() === '/agent') {
+      currentMode = 'agent';
+      console.log(chalk.bold.blue('\nAgent mode ON'));
+      console.log(chalk.dim('Autonomous mode. Agent will proactively use tools to solve tasks.\n'));
       continue;
     }
 
     if (input.toLowerCase() === '/tools') {
-      const tools = agent.getToolDefinitions();
+      const tools = agent.getToolDefinitions(currentMode);
       console.log(chalk.cyan('\nAvailable Tools:'));
       tools.forEach(tool => {
         console.log(`${chalk.yellow(tool.name)}: ${tool.description}`);
@@ -133,6 +140,20 @@ export async function startRepl(resumeId?: string) {
         await sessionManager.saveSession(session);
       }
       console.log(chalk.yellow('\nConversation history cleared.\n'));
+      continue;
+    }
+
+    if (input.startsWith('/')) {
+      const command = input.split(' ')[0];
+      console.log(chalk.red(`\nUnknown command: ${command}`));
+      console.log(chalk.cyan('Available commands:'));
+      console.log(`${chalk.yellow('/agent')}         - Switch to autonomous agent mode`);
+      console.log(`${chalk.yellow('/chat')}          - Switch to conversational chat mode`);
+      console.log(`${chalk.yellow('/plan')}          - Switch to planning mode (no changes)`);
+      console.log(`${chalk.yellow('/tools')}         - List available tools for current mode`);
+      console.log(`${chalk.yellow('/session')}       - Manage sessions (list, load, new)`);
+      console.log(`${chalk.yellow('/clear')}         - Clear current conversation history`);
+      console.log(`${chalk.yellow('/exit')}          - Exit the application\n`);
       continue;
     }
 
@@ -216,7 +237,7 @@ export async function startRepl(resumeId?: string) {
                 }
                 execSpinner.start('Executing plan...');
               },
-              'chat',
+              'agent',
               true
             );
             execSpinner.succeed('Execution completed');
