@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  tiny-cli:
+    image: tiny-cli:latest
+    container_name: tiny-cli
+    # Mount current directory to allow access to local files
+    volumes:
+      - .:/workspace
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+    # Working directory inside container
+    working_dir: /workspace

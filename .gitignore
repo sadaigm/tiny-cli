@@ -1,0 +1,14 @@
+node_modules/
+.npm/
+tiny-cli-docker/
+tiny-cli-desktop/
+.turbo/
+.tiny-cli/
+dist
+build
+logs
+.DS_Store
+context.md
+design.md
+full_impl.md
+tools.md
