@@ -41,23 +41,33 @@ export async function handleModelCommand(agent: Agent) {
     const json = await response.json() as { data?: { id: string }[] };
     spinner.stop();
     
-    const models = (json.data || []).map(m => m.id);
-    if (models.length === 0) {
+    const fetchedModels = (json.data || []).map(m => m.id);
+    if (fetchedModels.length === 0) {
       console.log(chalk.yellow('\nNo models found at this endpoint.\n'));
       return;
     }
+
+    // Add cancel option and prepare choices
+    const choices = ['(cancel)', ...fetchedModels];
+    const currentModel = config.model;
     
     const { model } = await inquirer.prompt([
       {
         type: 'autocomplete',
         name: 'model',
-        message: 'Select a model:',
+        message: `Select a model (current: ${chalk.cyan(currentModel)}):`,
+        default: '(cancel)',
         source: (_answers: any, input: string) => {
           input = input || '';
-          return fuzzy.filter(input, models).map(el => el.original);
+          return fuzzy.filter(input, choices).map(el => el.original);
         }
       }
     ]);
+
+    if (model === '(cancel)') {
+      console.log(chalk.dim('\nModel change cancelled.\n'));
+      return;
+    }
     
     agent.updateConfig({ model });
     console.log(chalk.green(`\nModel updated to: ${model}\n`));
