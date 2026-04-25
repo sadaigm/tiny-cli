@@ -31,6 +31,7 @@ export interface AgentConfig {
   temperature?: number;
   systemPrompt?: string;
   insecure?: boolean;
+  alwaysWrite?: boolean;
 }
 
 export interface ToolDefinition {

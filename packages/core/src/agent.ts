@@ -9,6 +9,7 @@ import { ModelClient } from "./model/client.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { registerDefaultTools } from "./tools/definitions.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./prompts/default.js";
+import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
 
 export class Agent {
   private model: ModelClient;
@@ -26,21 +27,27 @@ export class Agent {
   async run(
     userInput: string,
     onStep?: (step: AgentStep) => void,
+    mode: 'chat' | 'plan' = 'chat',
+    continueSession: boolean = false
   ): Promise<AgentResponse> {
-    this.messages = [];
+    if (!continueSession) {
+      this.messages = [];
+      let systemPrompt = mode === 'plan' ? PLANNING_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT;
 
-    let systemPrompt = DEFAULT_SYSTEM_PROMPT;
+      // Replace template variables
+      systemPrompt = systemPrompt
+        .replace("${process.cwd()}", process.cwd())
+        .replace("${process.platform()}", process.platform);
 
-    // Replace template variables
-    systemPrompt = systemPrompt
-      .replace("${process.cwd()}", process.cwd())
-      .replace("${process.platform()}", process.platform);
+      // Mandatory instruction for tool usage discipline
+      if (mode === 'chat') {
+        systemPrompt +=
+          "\n\nOnly use tools when required to perform a specific task. If the user provides a general reply or greeting, respond directly with normal text instead of using a tool call.";
+      }
 
-    // Mandatory instruction for tool usage discipline
-    systemPrompt +=
-      "\n\nOnly use tools when required to perform a specific task. If the user provides a general reply or greeting, respond directly with normal text instead of using a tool call.";
+      this.messages.push({ role: "system", content: systemPrompt });
+    }
 
-    this.messages.push({ role: "system", content: systemPrompt });
     this.messages.push({ role: "user", content: userInput });
 
     const steps: AgentStep[] = [];
@@ -55,9 +62,16 @@ export class Agent {
       const lastMessage = this.messages[this.messages.length - 1];
       const shouldSendTools = !lastMessage || lastMessage.role !== "tool";
 
+      let toolDefinitions = shouldSendTools ? this.registry.getDefinitions() : undefined;
+      
+      // In plan mode, filter out 'write' tool
+      if (mode === 'plan' && toolDefinitions) {
+        toolDefinitions = toolDefinitions.filter(d => d.name !== 'write');
+      }
+
       const response = await this.model.chat(
         this.messages,
-        shouldSendTools ? this.registry.getDefinitions() : undefined,
+        toolDefinitions,
       );
 
       this.messages.push({
