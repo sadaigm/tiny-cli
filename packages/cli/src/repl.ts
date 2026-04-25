@@ -1,8 +1,53 @@
 import inquirer from 'inquirer';
+import autocompletePrompt from 'inquirer-autocomplete-prompt';
+import fuzzy from 'fuzzy';
 import chalk from 'chalk';
 import ora from 'ora';
-import { Agent, AgentStep, SessionManager, Session } from '@tiny-cli/core';
+import { Agent, AgentStep, SessionManager, Session, CommandRegistry } from '@tiny-cli/core';
 import { loadConfig, saveConfig } from './config.js';
+import { handleModelCommand, handleToolsCommand } from './commands/handlers.js';
+
+// Deep monkey-patch to ensure absolute silence and correct command selection
+// @ts-ignore
+const originalRender = autocompletePrompt.prototype.render;
+// @ts-ignore
+autocompletePrompt.prototype.render = function(error) {
+  const self = this as any;
+  self.firstRender = false;
+  if (self.status === 'answered') {
+    self.screen.done();
+    return;
+  }
+  // ONLY hide suggestions for the main REPL prompt (suggestOnly: true)
+  // when not starting with a slash command.
+  if (self.opt.suggestOnly && !self.rl.line.startsWith('/')) {
+    self.screen.render(self.getQuestion() + self.rl.line, '');
+    return;
+  }
+  return originalRender.call(this, error);
+};
+
+// @ts-ignore
+const originalOnSubmit = autocompletePrompt.prototype.onSubmit;
+// @ts-ignore
+autocompletePrompt.prototype.onSubmit = function(line) {
+  const self = this as any;
+  
+  // If user is typing a command in the main prompt (suggestOnly: true) and hits Enter, 
+  // pick the selected suggestion automatically
+  const currentLine = line || self.rl.line || '';
+  if (self.opt.suggestOnly && currentLine.startsWith('/') && self.nbChoices > 0) {
+    const choice = self.currentChoices.getChoice(self.selected);
+    if (choice && choice.value) {
+      self.rl.line = choice.value;
+      line = choice.value;
+    }
+  }
+  return originalOnSubmit.call(this, line);
+};
+
+// Register autocomplete prompt
+inquirer.registerPrompt('autocomplete', autocompletePrompt);
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -10,10 +55,26 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function truncateId(id: string): string {
+  if (id.length <= 12) return id;
+  return `${id.slice(0, 5)}...${id.slice(-5)}`;
+}
+
 export async function startRepl(resumeId?: string) {
   const config = await loadConfig();
   const agent = new Agent(config);
   const sessionManager = new SessionManager();
+  const commandRegistry = new CommandRegistry();
+
+  // Register built-in commands
+  commandRegistry.register({ name: 'agent', description: 'Switch to autonomous agent mode' });
+  commandRegistry.register({ name: 'chat', description: 'Switch to conversational chat mode' });
+  commandRegistry.register({ name: 'plan', description: 'Switch to planning mode (no changes)' });
+  commandRegistry.register({ name: 'model', description: 'Select a different LLM model', hasSubOptions: true });
+  commandRegistry.register({ name: 'tools', description: 'List available tools for current mode', hasSubOptions: true });
+  commandRegistry.register({ name: 'session', description: 'Manage sessions (list, load, new)', hasSubOptions: true });
+  commandRegistry.register({ name: 'clear', description: 'Clear current conversation history' });
+  commandRegistry.register({ name: 'exit', description: 'Exit the application' });
 
   // Load or create session
   let currentSessionId: string;
@@ -48,115 +109,135 @@ export async function startRepl(resumeId?: string) {
     const padding = Math.max(0, columns - statsText.length);
     console.log(chalk.dim(' '.repeat(padding) + statsText));
 
-    const { input } = await inquirer.prompt([
+    const { selection } = await inquirer.prompt([
       {
-        type: 'input',
-        name: 'input',
-        message: chalk.green(`(${currentMode}:${currentSessionId}) ❯`),
-        prefix: ''
+        type: 'autocomplete',
+        name: 'selection',
+        message: chalk.green(`(${currentMode}) ❯`),
+        prefix: '',
+        suggestOnly: true,
+        searchText: '',
+        emptyText: '',
+        source: (_answers: any, input: string) => {
+          input = input || '';
+          const commands = commandRegistry.getAllCommands();
+          
+          if (input.startsWith('/')) {
+            const search = input.slice(1);
+            return fuzzy.filter(search, commands.map(c => '/' + c.name)).map(el => el.original);
+          } else {
+            return [];
+          }
+        }
       }
     ]);
 
-    if (!input || input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
-      config.lastSessionId = currentSessionId;
-      await saveConfig(config);
-      console.log(chalk.yellow(`\nGoodbye! (Session: ${currentSessionId})`));
-      console.log(chalk.dim(`To resume this session, run: tiny-cli --resume ${currentSessionId}\n`));
-      process.exit(0);
-    }
+    let input = selection.trim();
+    if (!input) continue;
 
-    if (input.toLowerCase() === '/plan') {
-      currentMode = 'plan';
-      console.log(chalk.bold.magenta('\nPlan mode ON'));
-      console.log(chalk.dim('Research and prepare a task list. No changes will be made.\n'));
-      continue;
-    }
+    // Handle Slash Commands
+    if (input.startsWith('/')) {
+      const commandName = input.slice(1);
+      const command = commandRegistry.getCommand(commandName);
 
-    if (input.toLowerCase() === '/chat') {
-      currentMode = 'chat';
-      console.log(chalk.bold.cyan('\nChat mode ON'));
-      console.log(chalk.dim('Conversational mode. Tool use is restricted.\n'));
-      continue;
-    }
-
-    if (input.toLowerCase() === '/agent') {
-      currentMode = 'agent';
-      console.log(chalk.bold.blue('\nAgent mode ON'));
-      console.log(chalk.dim('Autonomous mode. Agent will proactively use tools to solve tasks.\n'));
-      continue;
-    }
-
-    if (input.toLowerCase() === '/tools') {
-      const tools = agent.getToolDefinitions(currentMode);
-      console.log(chalk.cyan('\nAvailable Tools:'));
-      tools.forEach(tool => {
-        console.log(`${chalk.yellow(tool.name)}: ${tool.description}`);
-      });
-      console.log('');
-      continue;
-    }
-
-    if (input.toLowerCase().startsWith('/session')) {
-      const parts = input.split(' ');
-      const command = parts[1];
-      const arg = parts[2];
-
-      if (command === 'load' && arg) {
-        const newSession = await sessionManager.loadSession(arg);
-        if (newSession) {
-          session = newSession;
-          currentSessionId = arg;
-          agent.setHistory(session.messages);
+      if (command) {
+        if (commandName === 'exit' || commandName === 'quit') {
           config.lastSessionId = currentSessionId;
           await saveConfig(config);
-          console.log(chalk.green(`\nLoaded session: ${arg}\n`));
-        } else {
-          console.log(chalk.red(`\nSession not found: ${arg}\n`));
+          console.log(chalk.yellow(`\nGoodbye! (Session: ${currentSessionId})`));
+          process.exit(0);
         }
-      } else if (command === 'new' && arg) {
-        session = SessionManager.createSession(arg);
-        currentSessionId = arg;
-        agent.setHistory([]);
-        config.lastSessionId = currentSessionId;
-        await saveConfig(config);
-        console.log(chalk.green(`\nStarted new session: ${arg}\n`));
-      } else if (command === 'list') {
-        const sessions = await sessionManager.listSessions();
-        console.log(chalk.cyan('\nSessions:'));
-        sessions.forEach(s => {
-          console.log(`- ${chalk.yellow(s.id)} (Updated: ${new Date(s.lastUpdatedAt).toLocaleString()})`);
-        });
-        console.log('');
+
+        if (commandName === 'agent') {
+          currentMode = 'agent';
+          console.log(chalk.bold.blue('\nAgent mode ON'));
+          console.log(chalk.dim('Autonomous mode. Agent will proactively use tools to solve tasks.\n'));
+          continue;
+        }
+
+        if (commandName === 'chat') {
+          currentMode = 'chat';
+          console.log(chalk.bold.cyan('\nChat mode ON'));
+          console.log(chalk.dim('Conversational mode. Tool use is restricted.\n'));
+          continue;
+        }
+
+        if (commandName === 'plan') {
+          currentMode = 'plan';
+          console.log(chalk.bold.magenta('\nPlan mode ON'));
+          console.log(chalk.dim('Research and prepare a task list. No changes will be made.\n'));
+          continue;
+        }
+
+        if (commandName === 'clear') {
+          agent.setHistory([]);
+          if (session) {
+            session.messages = [];
+            await sessionManager.saveSession(session);
+          }
+          console.log(chalk.yellow('\nConversation history cleared.\n'));
+          continue;
+        }
+
+        if (commandName === 'model') {
+          await handleModelCommand(agent);
+          continue;
+        }
+
+        if (commandName === 'tools') {
+          await handleToolsCommand(agent, currentMode);
+          continue;
+        }
+
+        if (commandName === 'session') {
+          const { action } = await inquirer.prompt([
+            {
+              type: 'list',
+              name: 'action',
+              message: 'Session Action:',
+              choices: ['list', 'load', 'new', 'cancel']
+            }
+          ]);
+
+          if (action === 'list') {
+            const sessions = await sessionManager.listSessions();
+            console.log(chalk.cyan('\nSessions:'));
+            sessions.forEach(s => {
+              console.log(`- ${chalk.yellow(s.id)} (Updated: ${new Date(s.lastUpdatedAt).toLocaleString()})`);
+            });
+            console.log('');
+          } else if (action === 'load' || action === 'new') {
+            const { id } = await inquirer.prompt([{ type: 'input', name: 'id', message: `Enter session ID to ${action}:` }]);
+            if (id) {
+              if (action === 'load') {
+                const newSession = await sessionManager.loadSession(id);
+                if (newSession) {
+                  session = newSession;
+                  currentSessionId = id;
+                  agent.setHistory(session.messages);
+                  console.log(chalk.green(`\nLoaded session: ${id}\n`));
+                } else {
+                  console.log(chalk.red(`\nSession not found: ${id}\n`));
+                }
+              } else {
+                session = SessionManager.createSession(id);
+                currentSessionId = id;
+                agent.setHistory([]);
+                console.log(chalk.green(`\nStarted new session: ${id}\n`));
+              }
+              config.lastSessionId = currentSessionId;
+              await saveConfig(config);
+            }
+          }
+          continue;
+        }
       } else {
-        console.log(chalk.dim('\nUsage: /session [load|new|list] [id]\n'));
+        console.log(chalk.red(`\nUnknown command: ${input}`));
+        continue;
       }
-      continue;
     }
 
-    if (input.toLowerCase() === '/clear') {
-      agent.setHistory([]);
-      if (session) {
-        session.messages = [];
-        await sessionManager.saveSession(session);
-      }
-      console.log(chalk.yellow('\nConversation history cleared.\n'));
-      continue;
-    }
-
-    if (input.startsWith('/')) {
-      const command = input.split(' ')[0];
-      console.log(chalk.red(`\nUnknown command: ${command}`));
-      console.log(chalk.cyan('Available commands:'));
-      console.log(`${chalk.yellow('/agent')}         - Switch to autonomous agent mode`);
-      console.log(`${chalk.yellow('/chat')}          - Switch to conversational chat mode`);
-      console.log(`${chalk.yellow('/plan')}          - Switch to planning mode (no changes)`);
-      console.log(`${chalk.yellow('/tools')}         - List available tools for current mode`);
-      console.log(`${chalk.yellow('/session')}       - Manage sessions (list, load, new)`);
-      console.log(`${chalk.yellow('/clear')}         - Clear current conversation history`);
-      console.log(`${chalk.yellow('/exit')}          - Exit the application\n`);
-      continue;
-    }
-
+    // Standard Chat Execution
     const spinner = ora(currentMode === 'plan' ? 'Planning...' : 'Thinking...').start();
 
     try {
@@ -170,12 +251,11 @@ export async function startRepl(resumeId?: string) {
           }
         }
         spinner.start(currentMode === 'plan' ? 'Planning...' : 'Thinking...');
-      }, currentMode, true); // Always use continueSession: true in the REPL loop
+      }, currentMode, true);
 
       spinner.succeed(currentMode === 'plan' ? 'Plan prepared' : 'Task completed');
       console.log(`\n${chalk.blue(response.content)}\n`);
 
-      // Save session
       if (session) {
         session.messages = agent.getHistory();
         session.metadata.lastUpdatedAt = new Date().toISOString();
@@ -183,42 +263,8 @@ export async function startRepl(resumeId?: string) {
       }
 
       if (currentMode === 'plan') {
-        const { savePlan } = await inquirer.prompt([
-          {
-            type: 'confirm',
-            name: 'savePlan',
-            message: 'Do you want to save this plan as a document?',
-            default: false
-          }
-        ]);
-
-        if (savePlan) {
-          const { filename } = await inquirer.prompt([
-            {
-              type: 'input',
-              name: 'filename',
-              message: 'Enter filename to save the plan:',
-              default: 'implementation_plan.md'
-            }
-          ]);
-          
-          try {
-            const fs = await import('fs/promises');
-            const path = await import('path');
-            await fs.writeFile(path.resolve(process.cwd(), filename), response.content, 'utf-8');
-            console.log(chalk.green(`\nPlan saved to ${filename}\n`));
-          } catch (err: any) {
-            console.error(chalk.red(`\nFailed to save plan: ${err.message}\n`));
-          }
-        }
-
         const { execute } = await inquirer.prompt([
-          {
-            type: 'confirm',
-            name: 'execute',
-            message: 'Do you want to execute this plan?',
-            default: true
-          }
+          { type: 'confirm', name: 'execute', message: 'Do you want to execute this plan?', default: true }
         ]);
 
         if (execute) {
@@ -243,14 +289,11 @@ export async function startRepl(resumeId?: string) {
             execSpinner.succeed('Execution completed');
             console.log(`\n${chalk.green(execResponse.content)}\n`);
 
-            // Save session again after execution
             if (session) {
               session.messages = agent.getHistory();
               session.metadata.lastUpdatedAt = new Date().toISOString();
               await sessionManager.saveSession(session);
             }
-
-            // Switch back to chat mode after execution
             currentMode = 'chat';
             console.log(chalk.bold.cyan('Switched to chat mode.\n'));
           } catch (execError: any) {

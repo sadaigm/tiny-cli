@@ -34,6 +34,18 @@ export class Agent {
     return this.messages;
   }
 
+  getConfig(): AgentConfig {
+    return this.config;
+  }
+
+  updateConfig(updates: Partial<AgentConfig>) {
+    this.config = { ...this.config, ...updates };
+    // Re-initialize model client if model or endpoint changed
+    if (updates.model || updates.endpoint) {
+      this.model = new ModelClient(this.config);
+    }
+  }
+
   async run(
     userInput: string,
     onStep?: (step: AgentStep) => void,
