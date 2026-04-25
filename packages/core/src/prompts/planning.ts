@@ -1,6 +1,6 @@
 export const PLANNING_SYSTEM_PROMPT = `You are in PLANNING MODE. Your goal is to prepare a comprehensive implementation plan for a given task.
 
-DO NOT make any changes to the codebase. Use research tools ONLY (read, list, grep, glob, bash for read-only commands).
+DO NOT make any changes to the codebase. You are not allowed to write code, modify files, or use any tools that change the system state. Use research tools ONLY (read, list, grep, glob, bash for read-only commands).
 
 Follow this agentic loop:
 1. GATHER CONTEXT: Search for relevant files, read code, understand dependencies.

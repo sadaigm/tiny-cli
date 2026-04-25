@@ -10,6 +10,7 @@ import { ToolRegistry } from "./tools/registry.js";
 import { registerDefaultTools } from "./tools/definitions.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./prompts/default.js";
 import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
+import { getEncoding, type Tiktoken } from "js-tiktoken";
 
 export class Agent {
   private model: ModelClient;
@@ -24,28 +25,43 @@ export class Agent {
     registerDefaultTools(this.registry);
   }
 
+  setHistory(messages: Message[]) {
+    this.messages = [...messages];
+  }
+
+  getHistory(): Message[] {
+    return this.messages;
+  }
+
   async run(
     userInput: string,
     onStep?: (step: AgentStep) => void,
     mode: 'chat' | 'plan' = 'chat',
     continueSession: boolean = false
   ): Promise<AgentResponse> {
-    if (!continueSession) {
-      this.messages = [];
-      let systemPrompt = mode === 'plan' ? PLANNING_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT;
+    if (!continueSession || this.messages.length === 0) {
+      const hasSystemPrompt = this.messages.some(m => m.role === 'system');
+      
+      if (!continueSession || !hasSystemPrompt) {
+        if (!continueSession) {
+          this.messages = [];
+        }
+        
+        let systemPrompt = mode === 'plan' ? PLANNING_SYSTEM_PROMPT : DEFAULT_SYSTEM_PROMPT;
 
-      // Replace template variables
-      systemPrompt = systemPrompt
-        .replace("${process.cwd()}", process.cwd())
-        .replace("${process.platform()}", process.platform);
+        // Replace template variables
+        systemPrompt = systemPrompt
+          .replace("${process.cwd()}", process.cwd())
+          .replace("${process.platform()}", process.platform);
 
-      // Mandatory instruction for tool usage discipline
-      if (mode === 'chat') {
-        systemPrompt +=
-          "\n\nOnly use tools when required to perform a specific task. If the user provides a general reply or greeting, respond directly with normal text instead of using a tool call.";
+        // Mandatory instruction for tool usage discipline
+        if (mode === 'chat') {
+          systemPrompt +=
+            "\n\nOnly use tools when required to perform a specific task. If the user provides a general reply or greeting, respond directly with normal text instead of using a tool call.";
+        }
+
+        this.messages.push({ role: "system", content: systemPrompt });
       }
-
-      this.messages.push({ role: "system", content: systemPrompt });
     }
 
     this.messages.push({ role: "user", content: userInput });
@@ -123,5 +139,29 @@ export class Agent {
 
   getToolDefinitions() {
     return this.registry.getDefinitions();
+  }
+
+  getContextStats() {
+    const encoder = getEncoding("cl100k_base");
+    let totalTokens = 0;
+    let totalChars = 0;
+
+    for (const m of this.messages) {
+      if (m.content) {
+        totalChars += m.content.length;
+        totalTokens += encoder.encode(m.content).length;
+      }
+      
+      if (m.tool_calls) {
+        const toolCallsStr = JSON.stringify(m.tool_calls);
+        totalChars += toolCallsStr.length;
+        totalTokens += encoder.encode(toolCallsStr).length;
+      }
+    }
+
+    return {
+      tokens: totalTokens,
+      characters: totalChars,
+    };
   }
 }

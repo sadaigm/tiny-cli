@@ -1,31 +1,67 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
-import { Agent, AgentStep } from '@tiny-cli/core';
-import { loadConfig } from './config.js';
+import { Agent, AgentStep, SessionManager, Session } from '@tiny-cli/core';
+import { loadConfig, saveConfig } from './config.js';
 
-export async function startRepl() {
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export async function startRepl(resumeId?: string) {
   const config = await loadConfig();
   const agent = new Agent(config);
+  const sessionManager = new SessionManager();
+
+  // Load or create session
+  let currentSessionId: string;
+  let session: Session | null = null;
+
+  if (resumeId) {
+    session = await sessionManager.loadSession(resumeId);
+    if (session) {
+      currentSessionId = resumeId;
+      agent.setHistory(session.messages);
+      console.log(chalk.dim(`Resumed session: ${currentSessionId}`));
+    } else {
+      console.log(chalk.yellow(`Session ${resumeId} not found. Creating new session with that ID.`));
+      session = SessionManager.createSession(resumeId);
+      currentSessionId = resumeId;
+    }
+  } else {
+    session = SessionManager.createSession();
+    currentSessionId = session.metadata.id;
+  }
 
   console.log(chalk.bold.cyan('\n🚀 tiny-cli Agent Ready'));
-  console.log(chalk.dim(`Model: ${config.model} @ ${config.endpoint}\n`));
-  console.log(chalk.dim(`Description: ${config.systemPrompt}\n`));
+  console.log(chalk.dim(`Model: ${config.model} @ ${config.endpoint}`));
+  console.log(chalk.dim(`Session: ${currentSessionId}\n`));
 
   let currentMode: 'chat' | 'plan' = 'chat';
 
   while (true) {
+    const stats = agent.getContextStats();
+    const statsText = `current memory size : ${stats.tokens} tokens (${formatSize(stats.characters)})`;
+    const columns = process.stdout.columns || 80;
+    const padding = Math.max(0, columns - statsText.length);
+    console.log(chalk.dim(' '.repeat(padding) + statsText));
+
     const { input } = await inquirer.prompt([
       {
         type: 'input',
         name: 'input',
-        message: chalk.green(currentMode === 'plan' ? '(plan) ❯' : '❯'),
+        message: chalk.green(currentMode === 'plan' ? `(plan:${currentSessionId}) ❯` : `(${currentSessionId}) ❯`),
         prefix: ''
       }
     ]);
 
     if (!input || input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
-      console.log(chalk.yellow('Goodbye!'));
+      config.lastSessionId = currentSessionId;
+      await saveConfig(config);
+      console.log(chalk.yellow(`\nGoodbye! (Session: ${currentSessionId})`));
+      console.log(chalk.dim(`To resume this session, run: tiny-cli --resume ${currentSessionId}\n`));
       process.exit(0);
     }
 
@@ -53,6 +89,53 @@ export async function startRepl() {
       continue;
     }
 
+    if (input.toLowerCase().startsWith('/session')) {
+      const parts = input.split(' ');
+      const command = parts[1];
+      const arg = parts[2];
+
+      if (command === 'load' && arg) {
+        const newSession = await sessionManager.loadSession(arg);
+        if (newSession) {
+          session = newSession;
+          currentSessionId = arg;
+          agent.setHistory(session.messages);
+          config.lastSessionId = currentSessionId;
+          await saveConfig(config);
+          console.log(chalk.green(`\nLoaded session: ${arg}\n`));
+        } else {
+          console.log(chalk.red(`\nSession not found: ${arg}\n`));
+        }
+      } else if (command === 'new' && arg) {
+        session = SessionManager.createSession(arg);
+        currentSessionId = arg;
+        agent.setHistory([]);
+        config.lastSessionId = currentSessionId;
+        await saveConfig(config);
+        console.log(chalk.green(`\nStarted new session: ${arg}\n`));
+      } else if (command === 'list') {
+        const sessions = await sessionManager.listSessions();
+        console.log(chalk.cyan('\nSessions:'));
+        sessions.forEach(s => {
+          console.log(`- ${chalk.yellow(s.id)} (Updated: ${new Date(s.lastUpdatedAt).toLocaleString()})`);
+        });
+        console.log('');
+      } else {
+        console.log(chalk.dim('\nUsage: /session [load|new|list] [id]\n'));
+      }
+      continue;
+    }
+
+    if (input.toLowerCase() === '/clear') {
+      agent.setHistory([]);
+      if (session) {
+        session.messages = [];
+        await sessionManager.saveSession(session);
+      }
+      console.log(chalk.yellow('\nConversation history cleared.\n'));
+      continue;
+    }
+
     const spinner = ora(currentMode === 'plan' ? 'Planning...' : 'Thinking...').start();
 
     try {
@@ -66,10 +149,17 @@ export async function startRepl() {
           }
         }
         spinner.start(currentMode === 'plan' ? 'Planning...' : 'Thinking...');
-      }, currentMode);
+      }, currentMode, true); // Always use continueSession: true in the REPL loop
 
       spinner.succeed(currentMode === 'plan' ? 'Plan prepared' : 'Task completed');
       console.log(`\n${chalk.blue(response.content)}\n`);
+
+      // Save session
+      if (session) {
+        session.messages = agent.getHistory();
+        session.metadata.lastUpdatedAt = new Date().toISOString();
+        await sessionManager.saveSession(session);
+      }
 
       if (currentMode === 'plan') {
         const { savePlan } = await inquirer.prompt([
@@ -131,6 +221,17 @@ export async function startRepl() {
             );
             execSpinner.succeed('Execution completed');
             console.log(`\n${chalk.green(execResponse.content)}\n`);
+
+            // Save session again after execution
+            if (session) {
+              session.messages = agent.getHistory();
+              session.metadata.lastUpdatedAt = new Date().toISOString();
+              await sessionManager.saveSession(session);
+            }
+
+            // Switch back to chat mode after execution
+            currentMode = 'chat';
+            console.log(chalk.bold.cyan('Switched to chat mode.\n'));
           } catch (execError: any) {
             execSpinner.fail('Execution failed');
             console.error(chalk.red(execError.message));

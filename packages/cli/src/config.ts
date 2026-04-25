@@ -75,7 +75,7 @@ export async function loadConfig(): Promise<AgentConfig> {
         const env = profile.environment;
         const insecure = env?.insecure === true || env?.rejectUnauthorized === false;
 
-        return {
+        const config: AgentConfig = {
           endpoint: `${env?.hostUrl || 'http://localhost:11434'}${env?.appBasePath || '/v1'}`,
           model: profile.model,
           temperature: profile.temperature,
@@ -83,6 +83,17 @@ export async function loadConfig(): Promise<AgentConfig> {
           apiKey: env?.apiKey,
           insecure: insecure
         };
+
+        // Merge global settings (like lastSessionId)
+        const globalData = await tryReadFile(GLOBAL_CONFIG_FILE);
+        if (globalData) {
+          const globalConfig = JSON.parse(globalData);
+          if (globalConfig.lastSessionId) {
+            config.lastSessionId = globalConfig.lastSessionId;
+          }
+        }
+
+        return config;
       }
     } catch (err) {
       // Invalid JSON

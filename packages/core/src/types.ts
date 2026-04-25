@@ -32,6 +32,7 @@ export interface AgentConfig {
   systemPrompt?: string;
   insecure?: boolean;
   alwaysWrite?: boolean;
+  lastSessionId?: string;
 }
 
 export interface ToolDefinition {
@@ -57,4 +58,16 @@ export interface AgentResponse {
   content: string;
   steps: AgentStep[];
   plan?: string[];
+}
+
+export interface SessionMetadata {
+  id: string;
+  createdAt: string;
+  lastUpdatedAt: string;
+  title?: string;
+}
+
+export interface Session {
+  metadata: SessionMetadata;
+  messages: Message[];
 }
