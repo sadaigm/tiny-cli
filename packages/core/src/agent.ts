@@ -58,7 +58,8 @@ export class Agent {
     userInput: string,
     onStep?: (step: AgentStep) => void,
     mode: 'agent' | 'chat' | 'plan' = 'agent',
-    continueSession: boolean = false
+    continueSession: boolean = false,
+    signal?: AbortSignal
   ): Promise<AgentResponse> {
     if (!continueSession || this.messages.length === 0) {
       const hasSystemPrompt = this.messages.some(m => m.role === 'system');
@@ -99,6 +100,10 @@ export class Agent {
     const maxIterations = 10;
 
     while (iteration < maxIterations) {
+      if (signal?.aborted) {
+        return { content: "Execution cancelled by user.", steps };
+      }
+
       iteration++;
 
       // Provide tools on every iteration to enable the continuous agentic loop.
@@ -122,10 +127,19 @@ export class Agent {
         }
       }
 
-      const response = await this.model.chat(
-        this.messages,
-        toolDefinitions,
-      );
+      let response;
+      try {
+        response = await this.model.chat(
+          this.messages,
+          toolDefinitions,
+          signal
+        );
+      } catch (error: any) {
+        if (error.name === 'AbortError' || signal?.aborted) {
+          return { content: "Execution cancelled by user.", steps };
+        }
+        throw error;
+      }
 
       this.messages.push({
         role: "assistant",
@@ -145,6 +159,13 @@ export class Agent {
             JSON.parse(call.function.arguments),
             { sessionId: this.config.sessionId, cwd: process.cwd() }
           );
+
+          if (signal?.aborted) {
+            step.toolResult = result + '\n\n[Execution aborted by user]';
+            steps.push(step);
+            return { content: "Execution cancelled by user.", steps };
+          }
+
           step.toolResult = result;
 
           this.messages.push({

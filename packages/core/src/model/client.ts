@@ -18,7 +18,7 @@ export class ModelClient {
     }
   }
 
-  async chat(messages: Message[], tools?: ToolDefinition[]): Promise<ModelResponse> {
+  async chat(messages: Message[], tools?: ToolDefinition[], signal?: AbortSignal): Promise<ModelResponse> {
     const payload: any = {
       model: this.config.model,
       messages,
@@ -44,7 +44,8 @@ export class ModelClient {
         'Authorization': `Bearer ${this.config.apiKey || 'none'}`
       },
       body: JSON.stringify(payload),
-      agent: this.agent
+      agent: this.agent,
+      signal
     });
 
     if (!response.ok) {

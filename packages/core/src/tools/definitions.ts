@@ -46,6 +46,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     }
   };
   registry.register(readDef, async (args) => {
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
     const fullPath = path.resolve(process.cwd(), args.path);
     return await readFile(fullPath, 'utf-8');
   });
@@ -64,6 +65,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
     }
   };
   registry.register(writeDef, async (args) => {
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid. You must provide the file path.';
+    if (args.content === undefined) return 'Error: "content" argument is missing. You must provide the content to write.';
     const fullPath = path.resolve(process.cwd(), args.path);
     await writeFile(fullPath, args.content, 'utf-8');
     return `Successfully wrote to ${args.path}`;
@@ -82,6 +85,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     }
   };
   registry.register(listDef, async (args) => {
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
     const fullPath = path.resolve(process.cwd(), args.path);
     const files = await readdir(fullPath, { withFileTypes: true });
     return files.map(f => `${f.isDirectory() ? '[DIR] ' : '[FILE] '}${f.name}`).join('\n');
@@ -101,6 +105,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
     }
   };
   registry.register(grepDef, async (args) => {
+    if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
     const fullPath = path.resolve(process.cwd(), args.path);
     return new Promise((resolve) => {
       exec(`grep -rIn "${args.pattern}" "${fullPath}"`, (err, stdout, stderr) => {
@@ -126,6 +132,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
     }
   };
   registry.register(globDef, async (args) => {
+    if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
     return new Promise((resolve) => {
       exec(`bash -c "ls -1 ${args.pattern}"`, (err, stdout, stderr) => {
         if (err && !stdout) {
@@ -154,6 +161,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
     if (!context?.sessionId) {
       return 'Error: Session ID is required for plan_write tool.';
     }
+
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
+    if (args.content === undefined) return 'Error: "content" argument is missing.';
 
     const ext = path.extname(args.path).toLowerCase();
     const allowedExtensions = ['.md', '.txt'];
