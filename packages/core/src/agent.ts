@@ -26,6 +26,14 @@ export class Agent {
     registerDefaultTools(this.registry);
   }
 
+  setSessionId(id: string) {
+    this.config.sessionId = id;
+  }
+
+  getSessionId(): string | undefined {
+    return this.config.sessionId;
+  }
+
   setHistory(messages: Message[]) {
     this.messages = [...messages];
   }
@@ -93,20 +101,24 @@ export class Agent {
     while (iteration < maxIterations) {
       iteration++;
 
-      // Only send tools if we're not responding to a tool result
-      // (i.e., if the last message is not a 'tool' role message)
-      const lastMessage = this.messages[this.messages.length - 1];
-      const shouldSendTools = !lastMessage || lastMessage.role !== "tool";
-
-      let toolDefinitions = shouldSendTools ? this.registry.getDefinitions() : undefined;
+      // Provide tools on every iteration to enable the continuous agentic loop.
+      // This allows the model to evaluate tool results and select subsequent tools.
+      let toolDefinitions = this.registry.getDefinitions();
       
       // Filter tools based on mode
       if (toolDefinitions) {
         if (mode === 'plan') {
-          toolDefinitions = toolDefinitions.filter(d => d.name !== 'write');
-        } else if (mode === 'chat') {
-          const allowedTools = ['read', 'list', 'grep'];
+          // In planning mode, we strictly whitelist read-only tools and plan_write
+          const allowedTools = ['read', 'list', 'grep', 'glob', 'plan_write'];
           toolDefinitions = toolDefinitions.filter(d => allowedTools.includes(d.name));
+        } else {
+          // In other modes, we exclude 'plan_write'
+          toolDefinitions = toolDefinitions.filter(d => d.name !== 'plan_write');
+          
+          if (mode === 'chat') {
+            const allowedTools = ['read', 'list', 'grep'];
+            toolDefinitions = toolDefinitions.filter(d => allowedTools.includes(d.name));
+          }
         }
       }
 
@@ -131,6 +143,7 @@ export class Agent {
           const result = await this.registry.call(
             call.function.name,
             JSON.parse(call.function.arguments),
+            { sessionId: this.config.sessionId, cwd: process.cwd() }
           );
           step.toolResult = result;
 
@@ -166,10 +179,14 @@ export class Agent {
     let definitions = this.registry.getDefinitions();
     
     if (mode === 'plan') {
-      definitions = definitions.filter(d => d.name !== 'write');
-    } else if (mode === 'chat') {
-      const allowedTools = ['read', 'list', 'grep'];
+      const allowedTools = ['read', 'list', 'grep', 'glob', 'plan_write'];
       definitions = definitions.filter(d => allowedTools.includes(d.name));
+    } else {
+      definitions = definitions.filter(d => d.name !== 'plan_write');
+      if (mode === 'chat') {
+        const allowedTools = ['read', 'list', 'grep'];
+        definitions = definitions.filter(d => allowedTools.includes(d.name));
+      }
     }
     
     return definitions;

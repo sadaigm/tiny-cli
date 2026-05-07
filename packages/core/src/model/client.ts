@@ -35,7 +35,7 @@ export class ModelClient {
       // Let the model decide freely based on the system prompt.
     }
     // add a debug for payload
-    console.log('Payload:', JSON.stringify(payload, null, 2));
+    // console.log('Payload:', JSON.stringify(payload, null, 2));
 
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',

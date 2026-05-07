@@ -33,6 +33,7 @@ export interface AgentConfig {
   insecure?: boolean;
   alwaysWrite?: boolean;
   lastSessionId?: string;
+  sessionId?: string;
 }
 
 export interface ToolDefinition {

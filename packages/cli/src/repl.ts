@@ -6,6 +6,8 @@ import ora from 'ora';
 import { Agent, AgentStep, SessionManager, Session, CommandRegistry } from '@tiny-cli/core';
 import { loadConfig, saveConfig } from './config.js';
 import { handleModelCommand, handleToolsCommand } from './commands/handlers.js';
+import fs from 'fs/promises';
+import path from 'path';
 
 // Deep monkey-patch to ensure absolute silence and correct command selection
 // @ts-ignore
@@ -95,6 +97,7 @@ export async function startRepl(resumeId?: string) {
     session = SessionManager.createSession();
     currentSessionId = session.metadata.id;
   }
+  agent.setSessionId(currentSessionId);
 
   console.log(chalk.bold.cyan('\n🚀 tiny-cli Agent Ready'));
   console.log(chalk.dim(`Model: ${config.model} @ ${config.endpoint}`));
@@ -214,6 +217,7 @@ export async function startRepl(resumeId?: string) {
                 if (newSession) {
                   session = newSession;
                   currentSessionId = id;
+                  agent.setSessionId(currentSessionId);
                   agent.setHistory(session.messages);
                   console.log(chalk.green(`\nLoaded session: ${id}\n`));
                 } else {
@@ -222,6 +226,7 @@ export async function startRepl(resumeId?: string) {
               } else {
                 session = SessionManager.createSession(id);
                 currentSessionId = id;
+                agent.setSessionId(currentSessionId);
                 agent.setHistory([]);
                 console.log(chalk.green(`\nStarted new session: ${id}\n`));
               }
@@ -268,10 +273,22 @@ export async function startRepl(resumeId?: string) {
         ]);
 
         if (execute) {
+          let planContent = "";
+          const planFilePath = path.join(process.cwd(), '.tiny-cli', currentSessionId, 'plan', 'plan.md');
+          try {
+            planContent = await fs.readFile(planFilePath, 'utf-8');
+          } catch (err) {
+            // Plan file might not exist if AI didn't use the tool
+          }
+
           const execSpinner = ora('Executing plan...').start();
           try {
+            const prompt = planContent 
+              ? `Execute the following plan:\n\n${planContent}`
+              : "Execute the plan previously prepared.";
+            
             const execResponse = await agent.run(
-              "Execute the plan previously prepared.",
+              prompt,
               (step: AgentStep) => {
                 execSpinner.stop();
                 if (step.toolCall) {
