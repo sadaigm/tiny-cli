@@ -1,34 +1,31 @@
-# Use Node.js LTS as base image
-FROM node:20-alpine
+# Stage 1: Builder
+FROM node:20-alpine AS builder
 
-# Set working directory
 WORKDIR /app
-
-# Set pnpm home and path for global packages
 ENV PNPM_HOME="/root/.local/share/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 
-# Install pnpm
 RUN npm install -g pnpm@10.33.0
 
-# Copy package files
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
-
-# Copy entire packages directory
 COPY packages ./packages
 
-# Install dependencies
 RUN pnpm install --no-frozen-lockfile
-
-# Build the project
 RUN pnpm build
 
-# Make the CLI available globally
-WORKDIR /app/packages/cli
-RUN pnpm link --global
+# Isolate the CLI package and its production dependencies
+RUN pnpm deploy --legacy --filter=./packages/cli --prod /app/pruned
 
-# Set the working directory back to /app
+# Stage 2: Runner
+FROM node:20-alpine AS runner
+
 WORKDIR /app
+
+# Copy only the pruned production files from the builder
+COPY --from=builder /app/pruned ./
+
+# Install the CLI globally using npm
+RUN npm install -g .
 
 # Set the entrypoint to sh for normal Linux shell access (Alpine uses sh)
 ENTRYPOINT ["/bin/sh"]

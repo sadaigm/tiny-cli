@@ -53,6 +53,10 @@ export interface AgentStep {
   thought: string;
   toolCall?: ToolCall;
   toolResult?: string;
+  timing?: {
+    modelChatMs?: number;
+    toolCallMs?: number;
+  };
 }
 
 export interface AgentResponse {

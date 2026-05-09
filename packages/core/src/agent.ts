@@ -12,6 +12,8 @@ import { DEFAULT_SYSTEM_PROMPT } from "./prompts/default.js";
 import { AGENT_SYSTEM_PROMPT } from "./prompts/agent.js";
 import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
 import { getEncoding, type Tiktoken } from "js-tiktoken";
+import fs from "fs/promises";
+import path from "path";
 
 export class Agent {
   private model: ModelClient;
@@ -89,6 +91,23 @@ export class Agent {
             "\n\nOnly use tools when required to perform a specific task. If the user provides a general reply or greeting, respond directly with normal text instead of using a tool call.";
         }
 
+        // Inject Plan Context if available
+        if (mode === 'agent' && this.config.sessionId) {
+          const planPath = path.join(process.cwd(), '.tiny-cli', this.config.sessionId, 'plan', 'current_task.md');
+          try {
+            const planContent = await fs.readFile(planPath, 'utf-8');
+            systemPrompt += `\n\nCURRENT PROJECT PLAN AND TASKS:\n--------------------------------------------------\n${planContent}\n--------------------------------------------------\n
+GUIDANCE FOR PLAN EXECUTION:
+1. When you start or resume, review the task list above to see what's done and what's pending.
+2. If the user asks to "continue", verify if the most recent task is actually complete.
+3. If you find a task is completed but not marked in the list, use the \`manage_tasks\` tool with \`action: "mark_done"\` to update the list.
+4. If the user provides a request that is not in the plan, you can add it to the plan using \`manage_tasks\` with \`action: "add"\`.
+5. Always prioritize the next incomplete task in the plan.`;
+          } catch (e) {
+            // No plan found, ignore
+          }
+        }
+
         this.messages.push({ role: "system", content: systemPrompt });
       }
     }
@@ -106,18 +125,13 @@ export class Agent {
 
       iteration++;
 
-      // Provide tools on every iteration to enable the continuous agentic loop.
-      // This allows the model to evaluate tool results and select subsequent tools.
       let toolDefinitions = this.registry.getDefinitions();
       
-      // Filter tools based on mode
       if (toolDefinitions) {
         if (mode === 'plan') {
-          // In planning mode, we strictly whitelist read-only tools and plan_write
           const allowedTools = ['read', 'list', 'grep', 'glob', 'plan_write'];
           toolDefinitions = toolDefinitions.filter(d => allowedTools.includes(d.name));
         } else {
-          // In other modes, we exclude 'plan_write'
           toolDefinitions = toolDefinitions.filter(d => d.name !== 'plan_write');
           
           if (mode === 'chat') {
@@ -127,6 +141,7 @@ export class Agent {
         }
       }
 
+      const modelStart = performance.now();
       let response;
       try {
         response = await this.model.chat(
@@ -140,6 +155,7 @@ export class Agent {
         }
         throw error;
       }
+      const modelChatMs = performance.now() - modelStart;
 
       this.messages.push({
         role: "assistant",
@@ -154,11 +170,15 @@ export class Agent {
             toolCall: call,
           };
 
+          const toolStart = performance.now();
           const result = await this.registry.call(
             call.function.name,
             JSON.parse(call.function.arguments),
             { sessionId: this.config.sessionId, cwd: process.cwd() }
           );
+          const toolCallMs = performance.now() - toolStart;
+          
+          step.timing = { modelChatMs, toolCallMs };
 
           if (signal?.aborted) {
             step.toolResult = result + '\n\n[Execution aborted by user]';
@@ -179,6 +199,7 @@ export class Agent {
         }
       } else {
         // No more tool calls, agent is done
+        await this.compactMemoryIfNeeded(signal);
         return {
           content: response.content,
           steps,
@@ -186,6 +207,7 @@ export class Agent {
       }
     }
 
+    await this.compactMemoryIfNeeded(signal);
     return {
       content: "Reached maximum iterations.",
       steps,
@@ -235,5 +257,74 @@ export class Agent {
       tokens: totalTokens,
       characters: totalChars,
     };
+  }
+
+  private async compactMemoryIfNeeded(signal?: AbortSignal) {
+    const stats = this.getContextStats();
+    if (stats.tokens <= 35000) {
+      return;
+    }
+
+    console.log(`\n[Agent] Context size (${stats.tokens} tokens) exceeds 35,000. Compacting memory...`);
+
+    const systemMessages = this.messages.filter(m => m.role === 'system');
+    const nonSystemMessages = this.messages.filter(m => m.role !== 'system');
+
+    const encoder = getEncoding("cl100k_base");
+    
+    let retainedTokens = 0;
+    const targetRetainedTokens = 8000;
+    
+    let retainIndex = nonSystemMessages.length;
+    for (let i = nonSystemMessages.length - 1; i >= 0; i--) {
+      const m = nonSystemMessages[i];
+      let msgTokens = 0;
+      if (m.content) msgTokens += encoder.encode(m.content).length;
+      if (m.tool_calls) msgTokens += encoder.encode(JSON.stringify(m.tool_calls)).length;
+      
+      if (retainedTokens + msgTokens > targetRetainedTokens) {
+        break;
+      }
+      retainedTokens += msgTokens;
+      retainIndex = i;
+    }
+
+    const messagesToSummarize = nonSystemMessages.slice(0, retainIndex);
+    const messagesToRetain = nonSystemMessages.slice(retainIndex);
+
+    if (messagesToSummarize.length === 0) {
+      return;
+    }
+
+    const summaryPrompt = "Summarize the following conversation history. IDENTIFY THE CURRENT ACTIVE TASK and the state of the implementation. Preserve all key technical decisions, file paths, completed tasks, and context. Do not omit any important technical details, errors, or findings.";
+    
+    const summaryMessages: Message[] = [
+      ...systemMessages,
+      ...messagesToSummarize,
+      { role: "user", content: summaryPrompt }
+    ];
+
+    try {
+      const response = await this.model.chat(summaryMessages, [], signal);
+      
+      const summaryMessage: Message = {
+        role: "system",
+        content: `[PREVIOUS CONTEXT SUMMARY]\n${response.content}`
+      };
+
+      this.messages = [
+        ...systemMessages,
+        summaryMessage,
+        ...messagesToRetain
+      ];
+
+      console.log(`[Agent] Memory compacted. New context size: ${this.getContextStats().tokens} tokens.\n`);
+    } catch (err: any) {
+      if (err.name === 'AbortError' || signal?.aborted) {
+        // Aborted, do nothing
+      } else {
+        console.error(`[Agent] Memory compaction failed: ${err.message}`);
+      }
+    }
   }
 }

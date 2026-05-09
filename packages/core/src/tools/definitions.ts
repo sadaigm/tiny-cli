@@ -36,19 +36,116 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // read
   const readDef: ToolDefinition = {
     name: 'read',
-    description: 'Read the contents of a file.',
+    description: 'Read a file. Can read the first 250 lines, a specific range, or the last 100 lines.',
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path to the file' }
+        path: { type: 'string', description: 'Path to the file' },
+        first250: { type: 'boolean', description: 'Read the first 250 lines' },
+        last100: { type: 'boolean', description: 'Read the last 100 lines' },
+        startLine: { type: 'number', description: 'Start of range' },
+        endLine: { type: 'number', description: 'End of range' }
       },
       required: ['path']
     }
   };
+
   registry.register(readDef, async (args) => {
-    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
     const fullPath = path.resolve(process.cwd(), args.path);
-    return await readFile(fullPath, 'utf-8');
+    const content = await readFile(fullPath, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    const total = lines.length;
+
+    let start = 0;
+    let end = total;
+
+    if (args.first250) {
+      start = 0;
+      end = Math.min(250, total);
+    } else if (args.last100) {
+      start = Math.max(0, total - 100);
+      end = total;
+    } else if (args.startLine !== undefined || args.endLine !== undefined) {
+      // Use provided range, default to 250 lines from start if end is missing
+      start = args.startLine !== undefined ? Math.max(0, (args.startLine as number) - 1) : 0;
+      end = args.endLine !== undefined ? Math.min(total, (args.endLine as number)) : Math.min(total, start + 250);
+    } else {
+      // Default behavior if nothing specified: First 250
+      start = 0;
+      end = Math.min(250, total);
+    }
+
+    const result = lines.slice(start, end).map((l, i) => `${(start + i + 1).toString().padStart(4, ' ')}: ${l}`).join('\n');
+    const header = `[FILE: ${args.path} | TOTAL LINES: ${total} | SHOWING: ${start + 1} to ${end}]\n`;
+    return header + result;
+  });
+
+  // search_replace
+  const searchReplaceDef: ToolDefinition = {
+    name: 'search_replace',
+    description: 'Surgically replace a block of text in a file. Requires an exact match of the search block including whitespace.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the file' },
+        search: { type: 'string', description: 'The exact block of text to find' },
+        replace: { type: 'string', description: 'The text to replace it with' }
+      },
+      required: ['path', 'search', 'replace']
+    }
+  };
+  registry.register(searchReplaceDef, async (args) => {
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
+    const fullPath = path.resolve(process.cwd(), args.path);
+    const content = await readFile(fullPath, 'utf-8');
+    
+    // Normalize line endings for matching
+    const normalizedContent = content.replace(/\r\n/g, '\n');
+    const normalizedSearch = (args.search as string).replace(/\r\n/g, '\n');
+    const normalizedReplace = (args.replace as string).replace(/\r\n/g, '\n');
+
+    const parts = normalizedContent.split(normalizedSearch);
+    if (parts.length === 1) {
+      return 'Error: Search block not found. Ensure exact match including whitespace and indentation.';
+    }
+    if (parts.length > 2) {
+      return 'Error: Search block found multiple times. Please provide a more unique search block.';
+    }
+
+    const newContent = parts.join(normalizedReplace);
+    await writeFile(fullPath, newContent, 'utf-8');
+    return `Successfully updated ${args.path}`;
+  });
+
+  // insert_lines
+  const insertLinesDef: ToolDefinition = {
+    name: 'insert_lines',
+    description: 'Insert text at a specific line number in a file.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the file' },
+        line: { type: 'number', description: 'Line number to insert at (1-indexed)' },
+        content: { type: 'string', description: 'Text to insert' },
+        position: { type: 'string', enum: ['before', 'after'], description: 'Insert before or after the line (default: after)' }
+      },
+      required: ['path', 'line', 'content']
+    }
+  };
+  registry.register(insertLinesDef, async (args) => {
+    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
+    const fullPath = path.resolve(process.cwd(), args.path);
+    const content = await readFile(fullPath, 'utf-8');
+    const lines = content.split(/\r?\n/);
+    
+    const lineNum = args.line as number;
+    const position = (args.position as string) || 'after';
+    const index = position === 'before' ? lineNum - 1 : lineNum;
+    
+    lines.splice(index, 0, args.content as string);
+    await writeFile(fullPath, lines.join('\n'), 'utf-8');
+    return `Successfully inserted lines into ${args.path} at line ${lineNum} (${position})`;
   });
 
   // write
@@ -179,6 +276,78 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return `Successfully wrote plan to ${fullPath}`;
     } catch (error: any) {
       return `Error writing plan: ${error.message}`;
+    }
+  });
+  // manage_tasks
+  const manageTasksDef: ToolDefinition = {
+    name: 'manage_tasks',
+    description: 'Manage the current project task list (current_task.md).',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: { 
+          type: 'string', 
+          enum: ['list', 'mark_done', 'add'],
+          description: 'Action to perform: list tasks, mark a task as done, or add a new task.'
+        },
+        taskIndex: { 
+          type: 'number', 
+          description: 'The 1-based index of the task to mark as done (required for mark_done).' 
+        },
+        taskText: { 
+          type: 'string', 
+          description: 'The text of the new task to add (required for add).' 
+        }
+      },
+      required: ['action']
+    }
+  };
+
+  registry.register(manageTasksDef, async (args, context) => {
+    if (!context?.sessionId) return "Error: No session ID found. Cannot manage tasks.";
+    
+    const planDir = path.join(context.cwd || process.cwd(), '.tiny-cli', context.sessionId, 'plan');
+    const taskPath = path.join(planDir, 'current_task.md');
+    
+    try {
+      const content = await readFile(taskPath, 'utf-8');
+      const lines = content.split('\n');
+      
+      if (args.action === 'list') {
+        return content;
+      }
+      
+      if (args.action === 'mark_done') {
+        if (args.taskIndex === undefined) return "Error: taskIndex is required for mark_done.";
+        
+        let currentIdx = 0;
+        let modified = false;
+        const newLines = lines.map(line => {
+          if (line.trim().startsWith('- [')) {
+            currentIdx++;
+            if (currentIdx === args.taskIndex) {
+              modified = true;
+              return line.replace(/\[\s\]/, '[x]');
+            }
+          }
+          return line;
+        });
+        
+        if (!modified) return `Error: Task index ${args.taskIndex} not found or already completed.`;
+        await writeFile(taskPath, newLines.join('\n'), 'utf-8');
+        return `Successfully marked task ${args.taskIndex} as completed.`;
+      }
+      
+      if (args.action === 'add') {
+        if (!args.taskText) return "Error: taskText is required for add.";
+        const newLines = [...lines, `- [ ] ${args.taskText}`];
+        await writeFile(taskPath, newLines.join('\n'), 'utf-8');
+        return `Successfully added new task: ${args.taskText}`;
+      }
+      
+      return "Error: Invalid action.";
+    } catch (e: any) {
+      return `Error: Could not access task list: ${e.message}`;
     }
   });
 }

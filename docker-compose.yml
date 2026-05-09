@@ -6,7 +6,7 @@ services:
     container_name: tiny-cli
     # Mount current directory to allow access to local files
     volumes:
-      - .:/workspace
+      - ./workspace:/workspace
     # Keep container running for interactive use
     stdin_open: true
     tty: true
