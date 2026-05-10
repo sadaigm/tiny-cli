@@ -164,7 +164,28 @@ GUIDANCE FOR PLAN EXECUTION:
       });
 
       if (response.tool_calls && response.tool_calls.length > 0) {
+        console.log(`[Agent] Executing ${response.tool_calls.length} tool calls...`);
         for (const call of response.tool_calls) {
+          const argStr = call.function.arguments;
+          const callKey = `${call.function.name}:${argStr}`;
+          
+          // Check for exact redundancy in this run to prevent loops
+          const previousCalls = steps
+            .filter(s => s.toolCall)
+            .map(s => `${s.toolCall!.function.name}:${s.toolCall!.function.arguments}`);
+          
+          if (previousCalls.includes(callKey)) {
+            console.log(`[Agent] Redundancy detected for ${callKey}. Blocking call.`);
+            const redundancyError = `Error: You already called ${call.function.name} with these exact arguments in this turn. The result is already in your history. Please review the previous output or change your parameters (e.g., provide different line ranges for 'read' or a different pattern for 'grep').`;
+            
+            this.messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: redundancyError,
+            });
+            continue;
+          }
+
           const step: AgentStep = {
             thought: response.content,
             toolCall: call,
@@ -173,7 +194,7 @@ GUIDANCE FOR PLAN EXECUTION:
           const toolStart = performance.now();
           const result = await this.registry.call(
             call.function.name,
-            JSON.parse(call.function.arguments),
+            JSON.parse(argStr),
             { sessionId: this.config.sessionId, cwd: process.cwd() }
           );
           const toolCallMs = performance.now() - toolStart;

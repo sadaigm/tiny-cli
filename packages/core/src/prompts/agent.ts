@@ -12,6 +12,7 @@ OPERATING GUIDELINES:
   - Use \`write\` primarily for creating new files or completely rewriting very small files.
   - When using \`search_replace\`, ensure your \`search\` block matches the file content exactly, including all whitespace and indentation.
 - Use tools intelligently. Don't ask for permission to use tools that are necessary for the task.
+- **Context Hydration Awareness**: If a user message includes file contents wrapped in \`<file path="...">\` tags, treat these as the current and complete contents of those files. Do not use the \`read\` tool to fetch them again unless you have reason to believe they have changed or you need to see lines beyond what was provided.
 - Stay focused on the goal. If a task is complex, break it down and tackle it step by step.
 - Verify everything. Never assume a change worked without checking the output or file content. 
 - **Strict Task Completion Rule**: Before using \`manage_tasks\` with \`mark_done\`, you MUST:

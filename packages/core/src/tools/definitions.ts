@@ -67,13 +67,13 @@ export function registerDefaultTools(registry: ToolRegistry) {
       start = Math.max(0, total - 100);
       end = total;
     } else if (args.startLine !== undefined || args.endLine !== undefined) {
-      // Use provided range, default to 250 lines from start if end is missing
+      // Use provided range, default to 500 lines from start if end is missing
       start = args.startLine !== undefined ? Math.max(0, (args.startLine as number) - 1) : 0;
-      end = args.endLine !== undefined ? Math.min(total, (args.endLine as number)) : Math.min(total, start + 250);
+      end = args.endLine !== undefined ? Math.min(total, (args.endLine as number)) : Math.min(total, start + 500);
     } else {
-      // Default behavior if nothing specified: First 250
+      // Default behavior if nothing specified: First 500
       start = 0;
-      end = Math.min(250, total);
+      end = Math.min(500, total);
     }
 
     const result = lines.slice(start, end).map((l, i) => `${(start + i + 1).toString().padStart(4, ' ')}: ${l}`).join('\n');

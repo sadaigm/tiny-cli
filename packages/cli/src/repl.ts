@@ -9,6 +9,7 @@ import { handleModelCommand, handleToolsCommand } from './commands/handlers.js';
 import fs from 'fs/promises';
 import path from 'path';
 import readline from 'readline';
+import { buildFileIndex, searchFiles, hydrateMessage } from './file-mention.js';
 
 // Register autocomplete prompt
 inquirer.registerPrompt('autocomplete', autocompletePrompt);
@@ -24,7 +25,9 @@ autocompletePrompt.prototype.render = function (error) {
     self.screen.done();
     return;
   }
-  if (self.opt.suggestOnly && !self.rl.line.startsWith('/')) {
+  // Allow @mention picker to render even if suggestOnly is true and line doesn't start with /
+  const isAtMention = self.rl.line.match(/@(\S*)$/);
+  if (self.opt.suggestOnly && !self.rl.line.startsWith('/') && !isAtMention) {
     self.screen.render(self.getQuestion() + self.rl.line, '');
     return;
   }
@@ -37,13 +40,32 @@ const originalOnSubmit = autocompletePrompt.prototype.onSubmit;
 autocompletePrompt.prototype.onSubmit = function (line) {
   const self = this as any;
   const currentLine = line || self.rl.line || '';
+  
+  // Case 1: Slash command selection
   if (self.opt.suggestOnly && currentLine.startsWith('/') && self.nbChoices > 0) {
     const choice = self.currentChoices.getChoice(self.selected);
     if (choice && choice.value) {
       self.rl.line = choice.value;
       line = choice.value;
     }
+    return originalOnSubmit.call(this, line);
   }
+
+  // Case 2: @mention selection - pick file, keep composing
+  const atMatch = currentLine.match(/@(\S*)$/);
+  if (self.opt.suggestOnly && atMatch && self.nbChoices > 0) {
+    const choice = self.currentChoices.getChoice(self.selected);
+    if (choice && choice.value) {
+      const newLine = currentLine.slice(0, atMatch.index) + `[@${choice.value}] `;
+      self.rl.line = newLine;
+      self.rl.cursor = newLine.length;
+      // Reset picker state
+      self.search(newLine); 
+      self.render();
+      return; // Do NOT submit the prompt
+    }
+  }
+
   return originalOnSubmit.call(this, line);
 };
 
@@ -194,6 +216,8 @@ ${planContent}`;
   }
 
   while (true) {
+    const fileIndex = await buildFileIndex(process.cwd());
+
     // Check for Plan Execution Resumption
     if ((global as any).resumeExecution) {
       (global as any).resumeExecution = false;
@@ -221,6 +245,12 @@ ${planContent}`;
           if (input.startsWith('/')) {
             const search = input.slice(1);
             return fuzzy.filter(search, commands.map(c => '/' + c.name)).map(el => el.original);
+          }
+          const atMatch = input.match(/@(\S*)$/);
+          if (atMatch) {
+            // Re-fetch index inside source to ensure it's fresh if needed, 
+            // but for now the loop-level refresh is enough.
+            return searchFiles(fileIndex, atMatch[1]);
           }
           return [];
         }
@@ -320,7 +350,8 @@ ${planContent}`;
         process.stdin.on('keypress', onKeypress);
       }
 
-      const response = await agent.run(input, (step: AgentStep) => {
+      const hydratedInput = await hydrateMessage(input);
+      const response = await agent.run(hydratedInput, (step: AgentStep) => {
         spinner.stop();
         if (step.toolCall) {
           const timing = step.timing?.toolCallMs ? chalk.dim(` [${Math.round(step.timing.toolCallMs)}ms]`) : '';
