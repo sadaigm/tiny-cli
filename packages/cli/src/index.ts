@@ -24,6 +24,7 @@ program
       // Single task execution
       const config = await loadConfig();
       const agent = new Agent(config);
+      await agent.init();
       const sessionManager = new SessionManager();
 
       // Load or create session
@@ -67,6 +68,8 @@ program
       } catch (error: any) {
         spinner.fail(chalk.red('Agent error'));
         console.error(chalk.red(`\nError: ${error.message}\n`));
+      } finally {
+        await agent.destroy();
       }
     }
   });

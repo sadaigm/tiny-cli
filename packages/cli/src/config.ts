@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { AgentConfig, DEFAULT_SYSTEM_PROMPT } from '@tiny-cli/core';
+import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig } from '@tiny-cli/core';
 
 const GLOBAL_CONFIG_DIR = path.join(os.homedir(), '.config', 'tiny-cli');
 const GLOBAL_CONFIG_FILE = path.join(GLOBAL_CONFIG_DIR, 'config.json');
@@ -27,6 +27,7 @@ interface AgentProfile {
     rejectUnauthorized?: boolean;
     insecure?: boolean;
   };
+  mcpServers?: McpServerConfig[];
 }
 
 export async function loadConfig(): Promise<AgentConfig> {
@@ -81,7 +82,8 @@ export async function loadConfig(): Promise<AgentConfig> {
           temperature: profile.temperature,
           systemPrompt: profile.systemPrompt,
           apiKey: env?.apiKey,
-          insecure: insecure
+          insecure: insecure,
+          mcpServers: profile.mcpServers
         };
 
         // Merge global settings (like lastSessionId)

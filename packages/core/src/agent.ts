@@ -14,18 +14,31 @@ import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
 import { getEncoding, type Tiktoken } from "js-tiktoken";
 import fs from "fs/promises";
 import path from "path";
+import { McpManager } from "./mcp/manager.js";
 
 export class Agent {
   private model: ModelClient;
   private registry: ToolRegistry;
   private config: AgentConfig;
   private messages: Message[] = [];
+  public mcpManager: McpManager;
 
   constructor(config: AgentConfig) {
     this.config = config;
     this.model = new ModelClient(config);
     this.registry = new ToolRegistry();
     registerDefaultTools(this.registry);
+    this.mcpManager = new McpManager();
+  }
+
+  async init(): Promise<void> {
+    if (this.config.mcpServers?.length) {
+      await this.mcpManager.connect(this.config.mcpServers);
+    }
+  }
+
+  async destroy(): Promise<void> {
+    await this.mcpManager.close();
   }
 
   setSessionId(id: string) {
@@ -125,18 +138,27 @@ GUIDANCE FOR PLAN EXECUTION:
 
       iteration++;
 
-      let toolDefinitions = this.registry.getDefinitions();
+      let toolDefinitions = [
+        ...this.registry.getDefinitions(),
+        ...this.mcpManager.getDefinitions()
+      ];
       
       if (toolDefinitions) {
         if (mode === 'plan') {
           const allowedTools = ['read', 'list', 'grep', 'glob', 'plan_write'];
-          toolDefinitions = toolDefinitions.filter(d => allowedTools.includes(d.name));
+          // Keep MCP tools out of plan mode unless specifically allowed, 
+          // for now we filter built-ins as before and keep all MCP tools for agent/chat
+          toolDefinitions = toolDefinitions.filter(d => 
+            d.name.startsWith('mcp__') || allowedTools.includes(d.name)
+          );
         } else {
           toolDefinitions = toolDefinitions.filter(d => d.name !== 'plan_write');
           
           if (mode === 'chat') {
             const allowedTools = ['read', 'list', 'grep'];
-            toolDefinitions = toolDefinitions.filter(d => allowedTools.includes(d.name));
+            toolDefinitions = toolDefinitions.filter(d => 
+              d.name.startsWith('mcp__') || allowedTools.includes(d.name)
+            );
           }
         }
       }
@@ -192,11 +214,17 @@ GUIDANCE FOR PLAN EXECUTION:
           };
 
           const toolStart = performance.now();
-          const result = await this.registry.call(
-            call.function.name,
-            JSON.parse(argStr),
-            { sessionId: this.config.sessionId, cwd: process.cwd() }
-          );
+          let result: string;
+          
+          if (call.function.name.startsWith('mcp__')) {
+            result = await this.mcpManager.callTool(call.function.name, JSON.parse(argStr));
+          } else {
+            result = await this.registry.call(
+              call.function.name,
+              JSON.parse(argStr),
+              { sessionId: this.config.sessionId, cwd: process.cwd() }
+            );
+          }
           const toolCallMs = performance.now() - toolStart;
           
           step.timing = { modelChatMs, toolCallMs };
@@ -238,18 +266,20 @@ GUIDANCE FOR PLAN EXECUTION:
   getMessages() {
     return this.messages;
   }
-
   getToolDefinitions(mode?: 'agent' | 'chat' | 'plan') {
-    let definitions = this.registry.getDefinitions();
+    let definitions = [
+      ...this.registry.getDefinitions(),
+      ...this.mcpManager.getDefinitions()
+    ];
     
     if (mode === 'plan') {
       const allowedTools = ['read', 'list', 'grep', 'glob', 'plan_write'];
-      definitions = definitions.filter(d => allowedTools.includes(d.name));
+      definitions = definitions.filter(d => d.name.startsWith('mcp__') || allowedTools.includes(d.name));
     } else {
       definitions = definitions.filter(d => d.name !== 'plan_write');
       if (mode === 'chat') {
         const allowedTools = ['read', 'list', 'grep'];
-        definitions = definitions.filter(d => allowedTools.includes(d.name));
+        definitions = definitions.filter(d => d.name.startsWith('mcp__') || allowedTools.includes(d.name));
       }
     }
     

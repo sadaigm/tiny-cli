@@ -78,6 +78,7 @@ function formatSize(bytes: number): string {
 export async function startRepl(resumeId?: string) {
   const config = await loadConfig();
   const agent = new Agent(config);
+  await agent.init();
   const sessionManager = new SessionManager();
   const commandRegistry = new CommandRegistry();
 
@@ -89,6 +90,7 @@ export async function startRepl(resumeId?: string) {
   commandRegistry.register({ name: 'tools', description: 'List available tools', hasSubOptions: true });
   commandRegistry.register({ name: 'session', description: 'Manage sessions', hasSubOptions: true });
   commandRegistry.register({ name: 'clear', description: 'Clear history' });
+  commandRegistry.register({ name: 'mcp', description: 'Manage MCP servers', hasSubOptions: true });
   commandRegistry.register({ name: 'exit', description: 'Exit the application' });
   commandRegistry.register({ name: 'continue', description: 'Continue with the active plan' });
 
@@ -257,75 +259,154 @@ ${planContent}`;
       }
     ]);
 
+    if (selection === undefined || selection === null) {
+      await agent.destroy();
+      process.exit(0);
+    }
+
     let input = selection.trim();
     if (!input) continue;
 
     if (input.startsWith('/')) {
-      const commandName = input.slice(1);
-      const command = commandRegistry.getCommand(commandName);
+      const parts = input.slice(1).split(' ');
+      const commandName = parts[0].toLowerCase();
 
-      if (command) {
-        if (commandName === 'exit' || commandName === 'quit') {
-          config.lastSessionId = currentSessionId;
-          await saveConfig(config);
-          process.exit(0);
-        }
-        if (commandName === 'agent') { currentMode = 'agent'; continue; }
-        if (commandName === 'chat') { currentMode = 'chat'; continue; }
-        if (commandName === 'plan') { currentMode = 'plan'; continue; }
-        if (commandName === 'continue') { (global as any).resumeExecution = true; continue; }
-        if (commandName === 'clear') { 
-          agent.setHistory([]); 
-          if (session) { session.messages = []; await sessionManager.saveSession(session); }
-          continue; 
-        }
-        if (commandName === 'model') { await handleModelCommand(agent); continue; }
-        if (commandName === 'tools') { await handleToolsCommand(agent, currentMode); continue; }
-        if (commandName === 'session') {
-          const { action } = await inquirer.prompt([
-            {
-              type: 'list',
-              name: 'action',
-              message: 'Session Action:',
-              choices: ['list', 'load', 'new', 'cancel']
-            }
-          ]);
+      if (commandName === 'exit' || commandName === 'quit') {
+        config.lastSessionId = currentSessionId;
+        await saveConfig(config);
+        await agent.destroy();
+        process.exit(0);
+      }
+      if (commandName === 'agent') { currentMode = 'agent'; continue; }
+      if (commandName === 'chat') { currentMode = 'chat'; continue; }
+      if (commandName === 'plan') { currentMode = 'plan'; continue; }
+      if (commandName === 'continue') { (global as any).resumeExecution = true; continue; }
+      if (commandName === 'clear') { 
+        agent.setHistory([]); 
+        if (session) { session.messages = []; await sessionManager.saveSession(session); }
+        continue; 
+      }
+      if (commandName === 'model') { await handleModelCommand(agent); continue; }
+      if (commandName === 'tools') { await handleToolsCommand(agent, currentMode); continue; }
+      if (commandName === 'session') {
+        const { action } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'action',
+            message: 'Session Action:',
+            choices: ['list', 'load', 'new', 'cancel']
+          }
+        ]);
 
-          if (action === 'list') {
-            const sessions = await sessionManager.listSessions();
-            console.log(chalk.cyan('\nSessions:'));
-            sessions.forEach(s => {
-              console.log(`- ${chalk.yellow(s.id)} (Updated: ${new Date(s.lastUpdatedAt).toLocaleString()})`);
-            });
-            console.log('');
-          } else if (action === 'load' || action === 'new') {
-            const { id } = await inquirer.prompt([{ type: 'input', name: 'id', message: `Enter session ID to ${action}:` }]);
-            if (id) {
-              if (action === 'load') {
-                const newSession = await sessionManager.loadSession(id);
-                if (newSession) {
-                  session = newSession;
-                  currentSessionId = id;
-                  agent.setSessionId(currentSessionId);
-                  agent.setHistory(session.messages);
-                  console.log(chalk.green(`\nLoaded session: ${id}\n`));
-                } else {
-                  console.log(chalk.red(`\nSession not found: ${id}\n`));
-                }
-              } else {
-                session = SessionManager.createSession(id);
+        if (action === 'list') {
+          const sessions = await sessionManager.listSessions();
+          console.log(chalk.cyan('\nSessions:'));
+          sessions.forEach(s => {
+            console.log(`- ${chalk.yellow(s.id)} (Updated: ${new Date(s.lastUpdatedAt).toLocaleString()})`);
+          });
+          console.log('');
+        } else if (action === 'load' || action === 'new') {
+          const { id } = await inquirer.prompt([{ type: 'input', name: 'id', message: `Enter session ID to ${action}:` }]);
+          if (id) {
+            if (action === 'load') {
+              const newSession = await sessionManager.loadSession(id);
+              if (newSession) {
+                session = newSession;
                 currentSessionId = id;
                 agent.setSessionId(currentSessionId);
-                agent.setHistory([]);
-                console.log(chalk.green(`\nStarted new session: ${id}\n`));
+                agent.setHistory(session.messages);
+                console.log(chalk.green(`\nLoaded session: ${id}\n`));
+              } else {
+                console.log(chalk.red(`\nSession not found: ${id}\n`));
               }
-              config.lastSessionId = currentSessionId;
-              await saveConfig(config);
+            } else {
+              session = SessionManager.createSession(id);
+              currentSessionId = id;
+              agent.setSessionId(currentSessionId);
+              agent.setHistory([]);
+              console.log(chalk.green(`\nStarted new session: ${id}\n`));
             }
+            config.lastSessionId = currentSessionId;
+            await saveConfig(config);
           }
+        }
+        continue;
+      }
+      if (commandName === 'mcp') {
+        const servers = config.mcpServers || [];
+        if (servers.length === 0) {
+          console.log(chalk.yellow('\nNo MCP servers configured in agents.json\n'));
           continue;
         }
+
+        const { serverName } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'serverName',
+            message: 'Select MCP Server:',
+            choices: servers.map(s => ({
+              name: `${s.name} [${s.type}] (${agent.mcpManager.getStatus(s.name)})`,
+              value: s.name
+            })).concat([{ name: 'Cancel', value: 'cancel' }])
+          }
+        ]);
+
+        if (serverName === 'cancel') continue;
+
+        const { action } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'action',
+            message: `Action for ${serverName}:`,
+            choices: [
+              { name: '1. Reconnect', value: 'reconnect' },
+              { name: '2. Disconnect', value: 'disconnect' },
+              { name: '3. List tools', value: 'list' },
+              { name: 'Cancel', value: 'cancel' }
+            ]
+          }
+        ]);
+
+        if (action === 'reconnect') {
+          const srv = servers.find(s => s.name === serverName);
+          if (srv) {
+            const spin = ora(`Reconnecting to ${serverName}...`).start();
+            try {
+              await agent.mcpManager.reconnect(srv);
+              spin.succeed(`Reconnected to ${serverName}`);
+            } catch (e: any) {
+              spin.fail(`Failed to reconnect: ${e.message}`);
+            }
+          }
+        } else if (action === 'disconnect') {
+          const spin = ora(`Disconnecting ${serverName}...`).start();
+          await agent.mcpManager.disconnect(serverName);
+          spin.succeed(`Disconnected ${serverName}`);
+        } else if (action === 'list') {
+          const tools = agent.mcpManager.getTools(serverName);
+          console.log(chalk.cyan(`\nTools for ${serverName}:`));
+          if (tools.length === 0) {
+            console.log(chalk.dim('  No tools found or server disconnected.'));
+          } else {
+            tools.forEach(t => {
+              console.log(`${chalk.yellow(t.definition.name)}`);
+              if (t.definition.description) {
+                const descLines = t.definition.description.split('\n');
+                if (descLines.length > 3) {
+                  console.log(chalk.dim(`  ${descLines.slice(0, 3).join('\n  ')}...`));
+                } else {
+                  console.log(chalk.dim(`  ${t.definition.description}`));
+                }
+              }
+            });
+          }
+          console.log('');
+        }
+        continue;
       }
+      
+      console.log(chalk.red(`\nUnknown command: ${input}\n`));
+      continue;
     } else {
       if (input.toLowerCase() === 'continue' && currentMode === 'agent') {
         (global as any).resumeExecution = true;

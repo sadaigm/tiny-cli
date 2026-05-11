@@ -24,6 +24,15 @@ export interface ModelOptions {
   stream?: boolean;
 }
 
+export interface McpServerConfig {
+  name: string;
+  type: 'stdio' | 'http';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+}
+
 export interface AgentConfig {
   endpoint: string;
   apiKey?: string;
@@ -34,6 +43,7 @@ export interface AgentConfig {
   alwaysWrite?: boolean;
   lastSessionId?: string;
   sessionId?: string;
+  mcpServers?: McpServerConfig[];
 }
 
 export interface ToolDefinition {

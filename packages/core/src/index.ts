@@ -7,3 +7,4 @@ export * from './prompts/default.js';
 export * from './prompts/agent.js';
 export * from './session.js';
 export * from './commands/registry.js';
+export * from './mcp/manager.js';
