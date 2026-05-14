@@ -216,14 +216,20 @@ GUIDANCE FOR PLAN EXECUTION:
           const toolStart = performance.now();
           let result: string;
           
-          if (call.function.name.startsWith('mcp__')) {
-            result = await this.mcpManager.callTool(call.function.name, JSON.parse(argStr));
-          } else {
-            result = await this.registry.call(
-              call.function.name,
-              JSON.parse(argStr),
-              { sessionId: this.config.sessionId, cwd: process.cwd() }
-            );
+          try {
+            const parsedArgs = JSON.parse(argStr);
+            if (call.function.name.startsWith('mcp__')) {
+              result = await this.mcpManager.callTool(call.function.name, parsedArgs);
+            } else {
+              result = await this.registry.call(
+                call.function.name,
+                parsedArgs,
+                { sessionId: this.config.sessionId, cwd: process.cwd() }
+              );
+            }
+          } catch (error: any) {
+            result = `Tool Error: ${error.message}`;
+            console.error(`[Agent] Tool execution failed: ${error.message}`);
           }
           const toolCallMs = performance.now() - toolStart;
           

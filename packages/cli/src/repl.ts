@@ -156,15 +156,21 @@ export async function startRepl(resumeId?: string) {
       const statsText = `current memory size : ${stats.tokens} tokens (${formatSize(stats.characters)})`;
       console.log(chalk.dim(' '.repeat(Math.max(0, (process.stdout.columns || 80) - statsText.length)) + statsText));
 
-      const execSpinner = ora(`Executing task...`).start();
       const prompt = `You are in execution mode. 
+Your goal is to implement the task described below.
 
 Your CURRENT task to implement is EXACTLY:
 ${task.text}
 
 Plan Context:
-${planContent}`;
+${planContent}
+
+CRITICAL INSTRUCTIONS:
+1. When you have successfully implemented and verified the task, you MUST call the 'mark_task_complete' tool.
+2. If you do not call 'mark_task_complete', the task will be marked as FAILED or INCOMPLETE.
+3. Only call 'mark_task_complete' if the code is actually written and tested.`;
       
+      const execSpinner = ora(`Executing task ${i+1}/${incompleteTasks.length}...`).start();
       const abortController = new AbortController();
       const onKeypress = (str: any, key: any) => {
         if (key && (key.name === 'escape' || (key.ctrl && key.name === 'c'))) {
@@ -193,14 +199,45 @@ ${planContent}`;
           execSpinner.start(`Executing task ${i+1}/${incompleteTasks.length}...` + aiTiming);
         }, 'agent', true, abortController.signal);
 
-        execSpinner.succeed(`Task ${i + 1} completed`);
+        // Verify if task was marked done
+        const updatedTaskContent = await fs.readFile(currentTaskPath, 'utf-8');
+        const updatedLines = updatedTaskContent.split('\n');
+        const isActuallyMarked = updatedLines.some(line => line.includes(task.text.replace(/^- \[\s\]/, '')) && line.includes('[x]'));
+
+        if (isActuallyMarked) {
+          execSpinner.succeed(`Task ${i + 1} completed`);
+        } else {
+          execSpinner.warn(`Task ${i + 1} finished turn but was NOT marked as complete by agent.`);
+          const { action } = await inquirer.prompt([
+            {
+              type: 'list',
+              name: 'action',
+              message: 'What should we do?',
+              choices: [
+                { name: 'Retry task execution', value: 'retry' },
+                { name: 'Mark as done manually and continue', value: 'manual' },
+                { name: 'Skip for now', value: 'skip' },
+                { name: 'Stop execution', value: 'stop' }
+              ]
+            }
+          ]);
+
+          if (action === 'retry') {
+            i--; // Repeat this task
+            continue;
+          } else if (action === 'manual') {
+            updatedLines[task.lineIndex] = task.text.replace(/^- \[\s\]/, '- [x]');
+            await fs.writeFile(currentTaskPath, updatedLines.join('\n'), 'utf-8');
+            execSpinner.succeed(`Task ${i + 1} marked as done manually`);
+          } else if (action === 'skip') {
+            // Do nothing, moves to next task
+          } else {
+            abortExecution = true;
+          }
+        }
+
         console.log(`\n${chalk.green(execResponse.content)}\n`);
 
-        if (!abortController.signal.aborted) {
-          taskLines[task.lineIndex] = task.text.replace(/^- \[\s\]/, '- [x]');
-          await fs.writeFile(currentTaskPath, taskLines.join('\n'), 'utf-8');
-        }
-        
         if (session) {
           session.messages = agent.getHistory();
           await sessionManager.saveSession(session);

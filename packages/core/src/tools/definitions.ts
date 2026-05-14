@@ -165,8 +165,13 @@ export function registerDefaultTools(registry: ToolRegistry) {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid. You must provide the file path.';
     if (args.content === undefined) return 'Error: "content" argument is missing. You must provide the content to write.';
     const fullPath = path.resolve(process.cwd(), args.path);
-    await writeFile(fullPath, args.content, 'utf-8');
-    return `Successfully wrote to ${args.path}`;
+    try {
+      await mkdir(path.dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, args.content, 'utf-8');
+      return `Successfully wrote to ${args.path}`;
+    } catch (error: any) {
+      return `Error writing to ${args.path}: ${error.message}`;
+    }
   });
 
   // list
@@ -348,6 +353,48 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return "Error: Invalid action.";
     } catch (e: any) {
       return `Error: Could not access task list: ${e.message}`;
+    }
+  });
+  // mark_task_complete
+  const markTaskCompleteDef: ToolDefinition = {
+    name: 'mark_task_complete',
+    description: 'Signal that the current task is fully implemented and verified.',
+    parameters: {
+      type: 'object',
+      properties: {
+        notes: { type: 'string', description: 'Optional notes about the implementation' }
+      }
+    }
+  };
+
+  registry.register(markTaskCompleteDef, async (args, context) => {
+    if (!context?.sessionId) return "Error: No session ID found.";
+    
+    // This is primarily a signal for the orchestrator. 
+    // We also use manage_tasks logic to actually mark it in the file.
+    const planDir = path.join(context.cwd || process.cwd(), '.tiny-cli', context.sessionId, 'plan');
+    const taskPath = path.join(planDir, 'current_task.md');
+    
+    try {
+      const content = await readFile(taskPath, 'utf-8');
+      const lines = content.split('\n');
+      
+      // Find the first incomplete task and mark it done
+      let modified = false;
+      const newLines = lines.map(line => {
+        if (!modified && line.trim().startsWith('- [ ]')) {
+          modified = true;
+          return line.replace(/\[\s\]/, '[x]');
+        }
+        return line;
+      });
+      
+      if (!modified) return "Warning: No incomplete tasks found in the plan to mark as done.";
+      
+      await writeFile(taskPath, newLines.join('\n'), 'utf-8');
+      return `Task successfully marked as complete.${args.notes ? ' Notes: ' + args.notes : ''}`;
+    } catch (e: any) {
+      return `Error updating task status: ${e.message}`;
     }
   });
 }
