@@ -33,6 +33,8 @@ export interface McpServerConfig {
   url?: string;
 }
 
+export type PermissionMode = 'notify' | 'auto-edit' | 'auto';
+
 export interface AgentConfig {
   endpoint: string;
   apiKey?: string;
@@ -44,12 +46,14 @@ export interface AgentConfig {
   lastSessionId?: string;
   sessionId?: string;
   mcpServers?: McpServerConfig[];
+  permissionMode?: PermissionMode;
 }
 
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: any; // JSON Schema
+  isModifying?: boolean;
 }
 
 export interface ToolResult {
@@ -80,6 +84,7 @@ export interface SessionMetadata {
   createdAt: string;
   lastUpdatedAt: string;
   title?: string;
+  permissionMode?: PermissionMode;
 }
 
 export interface Session {

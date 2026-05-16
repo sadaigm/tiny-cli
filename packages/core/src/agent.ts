@@ -4,6 +4,7 @@ import {
   ToolResult,
   AgentResponse,
   AgentStep,
+  ToolCall,
 } from "./types.js";
 import { ModelClient } from "./model/client.js";
 import { ToolRegistry } from "./tools/registry.js";
@@ -74,7 +75,8 @@ export class Agent {
     onStep?: (step: AgentStep) => void,
     mode: 'agent' | 'chat' | 'plan' = 'agent',
     continueSession: boolean = false,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onApproval?: (call: ToolCall) => Promise<boolean>
   ): Promise<AgentResponse> {
     if (!continueSession || this.messages.length === 0) {
       const hasSystemPrompt = this.messages.some(m => m.role === 'system');
@@ -214,9 +216,32 @@ GUIDANCE FOR PLAN EXECUTION:
           };
 
           const toolStart = performance.now();
-          let result: string;
+          let result: string | null = null;
+
+          // Permission Check
+          const mode = this.config.permissionMode || 'notify';
+          if (onApproval && mode !== 'auto') {
+            const def = toolDefinitions.find(d => d.name === call.function.name);
+            let needsApproval = false;
+            if (mode === 'notify') {
+              needsApproval = true;
+            } else if (mode === 'auto-edit') {
+              // In auto-edit, we only ask for non-edit modifying tools (like bash)
+              if (def?.isModifying && call.function.name === 'bash') {
+                needsApproval = true;
+              }
+            }
+            
+            if (needsApproval) {
+              const approved = await onApproval(call);
+              if (!approved) {
+                result = "Error: User denied permission to execute this tool.";
+              }
+            }
+          }
           
-          try {
+          if (result === null) {
+            try {
             const parsedArgs = JSON.parse(argStr);
             if (call.function.name.startsWith('mcp__')) {
               result = await this.mcpManager.callTool(call.function.name, parsedArgs);
@@ -231,6 +256,7 @@ GUIDANCE FOR PLAN EXECUTION:
             result = `Tool Error: ${error.message}`;
             console.error(`[Agent] Tool execution failed: ${error.message}`);
           }
+        }
           const toolCallMs = performance.now() - toolStart;
           
           step.timing = { modelChatMs, toolCallMs };

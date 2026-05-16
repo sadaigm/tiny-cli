@@ -34,8 +34,10 @@ export class ModelClient {
       // this overrides system prompt instructions and forces a tool call every time.
       // Let the model decide freely based on the system prompt.
     }
-    // add a debug for payload
-    // console.log('Payload:', JSON.stringify(payload, null, 2));
+    // add a debug for payload in single line json
+    const cMessages = payload.messages.filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system');
+
+    console.log('Payload:', JSON.stringify({ messages: cMessages }));
 
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',

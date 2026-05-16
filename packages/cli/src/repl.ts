@@ -21,6 +21,17 @@ const originalRender = autocompletePrompt.prototype.render;
 autocompletePrompt.prototype.render = function (error) {
   const self = this as any;
   self.firstRender = false;
+
+  // Ensure Ctrl+D exits correctly
+  if (self.rl && !self.rl._exitHandlerAdded) {
+    self.rl.input.on('keypress', (_str: string, key: any) => {
+      if (key && key.ctrl && key.name === 'd' && !self.rl.line) {
+        process.exit(0);
+      }
+    });
+    self.rl._exitHandlerAdded = true;
+  }
+
   if (self.status === 'answered') {
     self.screen.done();
     return;
@@ -38,6 +49,9 @@ autocompletePrompt.prototype.render = function (error) {
 const originalOnSubmit = autocompletePrompt.prototype.onSubmit;
 // @ts-ignore
 autocompletePrompt.prototype.onSubmit = function (line) {
+  if (line === undefined) {
+    return originalOnSubmit.call(this, line);
+  }
   const self = this as any;
   const currentLine = line || self.rl.line || '';
   
@@ -93,6 +107,7 @@ export async function startRepl(resumeId?: string) {
   commandRegistry.register({ name: 'mcp', description: 'Manage MCP servers', hasSubOptions: true });
   commandRegistry.register({ name: 'exit', description: 'Exit the application' });
   commandRegistry.register({ name: 'continue', description: 'Continue with the active plan' });
+  commandRegistry.register({ name: 'mode', description: 'Switch permission mode (notify, auto-edit, auto)' });
 
   // Load or create session
   let currentSessionId: string;
@@ -113,6 +128,9 @@ export async function startRepl(resumeId?: string) {
     currentSessionId = session.metadata.id;
   }
   agent.setSessionId(currentSessionId);
+  
+  // Resolve active permission mode (Session > Config > Default)
+  config.permissionMode = session.metadata.permissionMode || config.permissionMode || 'notify';
 
   console.log(chalk.bold.cyan('\n🚀 tiny-cli Agent Ready'));
   console.log(chalk.dim(`Model: ${config.model} @ ${config.endpoint}`));
@@ -188,6 +206,54 @@ CRITICAL INSTRUCTIONS:
       }
 
       try {
+        const onApproval = async (call: any) => {
+          execSpinner.stop();
+          console.log(chalk.yellow(`\n⚠️  Tool Approval Required`));
+          console.log(chalk.blue(`🔧 Tool: ${call.function.name}`));
+          console.log(chalk.dim(`Arguments: ${call.function.arguments}`));
+          
+          let approved;
+          try {
+            const response = await inquirer.prompt([
+              {
+                type: 'list',
+                name: 'approved',
+                message: 'Approve this tool execution?',
+                choices: [
+                  { name: 'Approve (Run)', value: 'yes' },
+                  { name: 'Approve (Session)', value: 'session' },
+                  { name: 'Skip (Cancel)', value: 'no' },
+                  { name: 'Abort Session', value: 'abort' }
+                ]
+              }
+            ]);
+            approved = response.approved;
+          } catch (e) {
+            abortController.abort();
+            abortExecution = true;
+            return false;
+          }
+          
+          if (approved === 'abort') {
+            abortController.abort();
+            abortExecution = true;
+            return false;
+          }
+          
+          if (approved === 'session') {
+            config.permissionMode = 'auto';
+            if (session) {
+              session.metadata.permissionMode = 'auto';
+              await sessionManager.saveSession(session);
+            }
+            execSpinner.start(`Executing task ${i+1}/${incompleteTasks.length}...`);
+            return true;
+          }
+          
+          execSpinner.start(`Executing task ${i+1}/${incompleteTasks.length}...`);
+          return approved === 'yes';
+        };
+
         const execResponse = await agent.run(prompt, (step) => {
           execSpinner.stop();
           if (step.toolCall) {
@@ -197,7 +263,7 @@ CRITICAL INSTRUCTIONS:
           }
           const aiTiming = step.timing?.modelChatMs ? chalk.dim(` [AI: ${(step.timing.modelChatMs / 1000).toFixed(1)}s]`) : '';
           execSpinner.start(`Executing task ${i+1}/${incompleteTasks.length}...` + aiTiming);
-        }, 'agent', true, abortController.signal);
+        }, 'agent', true, abortController.signal, onApproval);
 
         // Verify if task was marked done
         const updatedTaskContent = await fs.readFile(currentTaskPath, 'utf-8');
@@ -271,30 +337,38 @@ CRITICAL INSTRUCTIONS:
     const columns = process.stdout.columns || 80;
     console.log(chalk.dim(' '.repeat(Math.max(0, columns - statsText.length)) + statsText));
 
-    const { selection } = await inquirer.prompt([
-      {
-        type: 'autocomplete',
-        name: 'selection',
-        message: chalk.green(`(${currentMode}) ❯`),
-        prefix: '',
-        suggestOnly: true,
-        source: (_answers: any, input: string) => {
-          input = input || '';
-          const commands = commandRegistry.getAllCommands();
-          if (input.startsWith('/')) {
-            const search = input.slice(1);
-            return fuzzy.filter(search, commands.map(c => '/' + c.name)).map(el => el.original);
+    let selection;
+    try {
+      const response = await inquirer.prompt([
+        {
+          type: 'autocomplete',
+          name: 'selection',
+          message: chalk.green(`(${currentMode}) ❯`),
+          prefix: '',
+          suggestOnly: true,
+          source: (_answers: any, input: string) => {
+            input = input || '';
+            const commands = commandRegistry.getAllCommands();
+            if (input.startsWith('/')) {
+              const search = input.slice(1);
+              return fuzzy.filter(search, commands.map(c => '/' + c.name)).map(el => el.original);
+            }
+            const atMatch = input.match(/@(\S*)$/);
+            if (atMatch) {
+              // Re-fetch index inside source to ensure it's fresh if needed, 
+              // but for now the loop-level refresh is enough.
+              return searchFiles(fileIndex, atMatch[1]);
+            }
+            return [];
           }
-          const atMatch = input.match(/@(\S*)$/);
-          if (atMatch) {
-            // Re-fetch index inside source to ensure it's fresh if needed, 
-            // but for now the loop-level refresh is enough.
-            return searchFiles(fileIndex, atMatch[1]);
-          }
-          return [];
         }
-      }
-    ]);
+      ]);
+      selection = response.selection;
+    } catch (e) {
+      // Handle Ctrl+C or other prompt interruptions
+      await agent.destroy();
+      process.exit(0);
+    }
 
     if (selection === undefined || selection === null) {
       await agent.destroy();
@@ -325,6 +399,28 @@ CRITICAL INSTRUCTIONS:
       }
       if (commandName === 'model') { await handleModelCommand(agent); continue; }
       if (commandName === 'tools') { await handleToolsCommand(agent, currentMode); continue; }
+      if (commandName === 'mode') {
+        const { mode } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'mode',
+            message: 'Select Permission Mode:',
+            choices: [
+              { name: 'Notify (Always ask for modifying tools)', value: 'notify' },
+              { name: 'Auto-Edit (Auto-edit files, ask for bash)', value: 'auto-edit' },
+              { name: 'Auto (No prompts)', value: 'auto' }
+            ],
+            default: agent.getConfig().permissionMode || 'notify'
+          }
+        ]);
+        config.permissionMode = mode;
+        if (session) {
+          session.metadata.permissionMode = mode;
+          await sessionManager.saveSession(session);
+        }
+        console.log(chalk.green(`\nPermission mode set to: ${mode}\n`));
+        continue;
+      }
       if (commandName === 'session') {
         const { action } = await inquirer.prompt([
           {
@@ -469,6 +565,53 @@ CRITICAL INSTRUCTIONS:
       }
 
       const hydratedInput = await hydrateMessage(input);
+      
+      const onApproval = async (call: any) => {
+        spinner.stop();
+        console.log(chalk.yellow(`\n⚠️  Tool Approval Required`));
+        console.log(chalk.blue(`🔧 Tool: ${call.function.name}`));
+        console.log(chalk.dim(`Arguments: ${call.function.arguments}`));
+        
+        let approved;
+        try {
+          const response = await inquirer.prompt([
+            {
+              type: 'list',
+              name: 'approved',
+              message: 'Approve this tool execution?',
+              choices: [
+                { name: 'Approve (Run)', value: 'yes' },
+                { name: 'Approve (Session)', value: 'session' },
+                { name: 'Skip (Cancel)', value: 'no' },
+                { name: 'Abort Session', value: 'abort' }
+              ]
+            }
+          ]);
+          approved = response.approved;
+        } catch (e) {
+          abortController.abort();
+          return false;
+        }
+        
+        if (approved === 'abort') {
+          abortController.abort();
+          return false;
+        }
+        
+        if (approved === 'session') {
+          config.permissionMode = 'auto';
+          if (session) {
+            session.metadata.permissionMode = 'auto';
+            await sessionManager.saveSession(session);
+          }
+          spinner.start(currentMode === 'plan' ? 'Planning...' : 'Thinking...');
+          return true;
+        }
+        
+        spinner.start(currentMode === 'plan' ? 'Planning...' : 'Thinking...');
+        return approved === 'yes';
+      };
+
       const response = await agent.run(hydratedInput, (step: AgentStep) => {
         spinner.stop();
         if (step.toolCall) {
@@ -481,7 +624,7 @@ CRITICAL INSTRUCTIONS:
         }
         const aiTiming = step.timing?.modelChatMs ? chalk.dim(` [AI: ${(step.timing.modelChatMs / 1000).toFixed(1)}s]`) : '';
         spinner.start((currentMode === 'plan' ? 'Planning...' : 'Thinking...') + aiTiming);
-      }, currentMode, true, abortController.signal).finally(() => {
+      }, currentMode, true, abortController.signal, onApproval).finally(() => {
         if (process.stdin.isTTY) {
           process.stdin.removeListener('keypress', onKeypress);
           process.stdin.setRawMode(wasRaw);

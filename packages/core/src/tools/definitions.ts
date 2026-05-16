@@ -15,7 +15,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
         cmd: { type: 'string', description: 'The command to execute' }
       },
       required: ['cmd']
-    }
+    },
+    isModifying: true
   };
   registry.register(bashDef, async (args) => {
     let command = args.cmd;
@@ -93,7 +94,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
         replace: { type: 'string', description: 'The text to replace it with' }
       },
       required: ['path', 'search', 'replace']
-    }
+    },
+    isModifying: true
   };
   registry.register(searchReplaceDef, async (args) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
@@ -131,7 +133,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
         position: { type: 'string', enum: ['before', 'after'], description: 'Insert before or after the line (default: after)' }
       },
       required: ['path', 'line', 'content']
-    }
+    },
+    isModifying: true
   };
   registry.register(insertLinesDef, async (args) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
@@ -159,7 +162,8 @@ export function registerDefaultTools(registry: ToolRegistry) {
         content: { type: 'string', description: 'Contents to write' }
       },
       required: ['path', 'content']
-    }
+    },
+    isModifying: true
   };
   registry.register(writeDef, async (args) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid. You must provide the file path.';
