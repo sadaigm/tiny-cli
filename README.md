@@ -130,7 +130,7 @@ tiny-cli
 | `/mcp` | Manage MCP server connections |
 | `/session` | List/Load/New conversation sessions |
 | `/clear` | Clear conversation history |
-| `exit` | Save session and quit |
+| `/exit` | Save session and quit |
 
 ## ⚙️ Configuration
 
