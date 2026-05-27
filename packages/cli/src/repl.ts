@@ -89,10 +89,48 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export async function startRepl(resumeId?: string) {
+type LogLevel = 'TRACE' | 'DEBUG' | 'LOG' | 'ERROR';
+const LEVEL_ORDER: Record<LogLevel, number> = { TRACE: 0, DEBUG: 1, LOG: 2, ERROR: 3 };
+
+let _logLevel: LogLevel = 'LOG';
+
+function setLogLevel(level: LogLevel) {
+  _logLevel = level;
+}
+
+function shouldLog(level: LogLevel): boolean {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[_logLevel];
+}
+
+function logTrace(msg: string) {
+  if (shouldLog('TRACE')) console.log(`[TRACE] ${new Date().toISOString()} ${msg}`);
+}
+
+function logDebug(msg: string) {
+  if (shouldLog('DEBUG')) console.log(`[DEBUG] ${new Date().toISOString()} ${msg}`);
+}
+
+function logError(msg: string) {
+  if (shouldLog('ERROR')) console.error(`[ERROR] ${new Date().toISOString()} ${msg}`);
+}
+
+export async function startRepl(resumeId?: string, initialMode: 'agent' | 'chat' | 'plan' = 'agent') {
+  logTrace('startRepl called');
+  logTrace(`stdin.isTTY: ${process.stdin.isTTY}, stdout.isTTY: ${process.stdout.isTTY}`);
+
+  logTrace('Loading config...');
   const config = await loadConfig();
+  if (config.logLevel) setLogLevel(config.logLevel);
+  logTrace(`Config loaded: endpoint=${config.endpoint}, model=${config.model}, logLevel=${config.logLevel || 'LOG'}`);
+
+  logTrace('Creating Agent...');
   const agent = new Agent(config);
+  logTrace('Agent created');
+
+  logTrace('Initializing agent (MCP connecting in background)...');
   await agent.init();
+  logTrace('Agent initialized (MCP servers connecting in background)');
+
   const sessionManager = new SessionManager();
   const commandRegistry = new CommandRegistry();
 
@@ -132,11 +170,13 @@ export async function startRepl(resumeId?: string) {
   // Resolve active permission mode (Session > Config > Default)
   config.permissionMode = session.metadata.permissionMode || config.permissionMode || 'notify';
 
+  logTrace(`Session setup complete: id=${currentSessionId}`);
+
   console.log(chalk.bold.cyan('\n🚀 tiny-cli Agent Ready'));
   console.log(chalk.dim(`Model: ${config.model} @ ${config.endpoint}`));
   console.log(chalk.dim(`Session: ${currentSessionId}\n`));
 
-  let currentMode: 'agent' | 'chat' | 'plan' = 'agent';
+  let currentMode: 'agent' | 'chat' | 'plan' = initialMode;
 
   // Helper to execute tasks from the current plan
   async function executeActivePlan() {
@@ -321,7 +361,11 @@ CRITICAL INSTRUCTIONS:
   }
 
   while (true) {
+    logTrace('=== REPL loop start ===');
+
+    logDebug('Building file index...');
     const fileIndex = await buildFileIndex(process.cwd());
+    logDebug(`File index built: ${fileIndex.length} files`);
 
     // Check for Plan Execution Resumption
     if ((global as any).resumeExecution) {
@@ -339,6 +383,7 @@ CRITICAL INSTRUCTIONS:
 
     let selection;
     try {
+      logTrace('Showing inquirer prompt...');
       const response = await inquirer.prompt([
         {
           type: 'autocomplete',
@@ -364,6 +409,13 @@ CRITICAL INSTRUCTIONS:
         }
       ]);
       selection = response.selection;
+      logTrace(`User input received: "${selection}"`);
+
+      // Flush MCP background connection logs after prompt resolves
+      const mcpLogs = agent.mcpManager.flushLogs();
+      for (const log of mcpLogs) {
+        console.log(log.startsWith('✅') ? chalk.green(log) : chalk.red(log));
+      }
     } catch (e) {
       // Handle Ctrl+C or other prompt interruptions
       await agent.destroy();

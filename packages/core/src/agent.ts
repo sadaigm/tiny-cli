@@ -34,7 +34,7 @@ export class Agent {
 
   async init(): Promise<void> {
     if (this.config.mcpServers?.length) {
-      await this.mcpManager.connect(this.config.mcpServers);
+      this.mcpManager.connectBackground(this.config.mcpServers);
     }
   }
 
@@ -78,60 +78,57 @@ export class Agent {
     signal?: AbortSignal,
     onApproval?: (call: ToolCall) => Promise<boolean>
   ): Promise<AgentResponse> {
-    if (!continueSession || this.messages.length === 0) {
-      const hasSystemPrompt = this.messages.some(m => m.role === 'system');
-      
-      if (!continueSession || !hasSystemPrompt) {
-        if (!continueSession) {
-          this.messages = [];
-        }
-        
-        let systemPrompt: string;
-        if (mode === 'plan') {
-          systemPrompt = PLANNING_SYSTEM_PROMPT;
-        } else if (mode === 'chat') {
-          systemPrompt = DEFAULT_SYSTEM_PROMPT;
-        } else {
-          systemPrompt = AGENT_SYSTEM_PROMPT;
-        }
+    if (!continueSession) {
+      this.messages = [];
+    }
 
-        // Replace template variables
-        systemPrompt = systemPrompt
-          .replace("${process.cwd()}", process.cwd())
-          .replace("${process.platform()}", process.platform);
+    // Always ensure the system prompt matches the current mode and plan state
+    this.messages = this.messages.filter(m => m.role !== 'system');
 
-        // Mandatory instruction for tool usage discipline
-        if (mode === 'chat') {
-          systemPrompt +=
-            "\n\nOnly use tools when required to perform a specific task. If the user provides a general reply or greeting, respond directly with normal text instead of using a tool call.";
-        }
+    let systemPrompt: string;
+    if (mode === 'plan') {
+      systemPrompt = PLANNING_SYSTEM_PROMPT;
+    } else if (mode === 'chat') {
+      systemPrompt = DEFAULT_SYSTEM_PROMPT;
+    } else {
+      systemPrompt = AGENT_SYSTEM_PROMPT;
+    }
 
-        // Inject Plan Context if available
-        if (mode === 'agent' && this.config.sessionId) {
-          const planPath = path.join(process.cwd(), '.tiny-cli', this.config.sessionId, 'plan', 'current_task.md');
-          try {
-            const planContent = await fs.readFile(planPath, 'utf-8');
-            systemPrompt += `\n\nCURRENT PROJECT PLAN AND TASKS:\n--------------------------------------------------\n${planContent}\n--------------------------------------------------\n
+    // Replace template variables
+    systemPrompt = systemPrompt
+      .replace("${process.cwd()}", process.cwd())
+      .replace("${process.platform()}", process.platform);
+
+    // Mandatory instruction for tool usage discipline
+    if (mode === 'chat') {
+      systemPrompt +=
+        "\n\nOnly use tools when required to perform a specific task. If the user provides a general reply or greeting, respond directly with normal text instead of using a tool call.";
+    }
+
+    // Inject Plan Context if available
+    if (mode === 'agent' && this.config.sessionId) {
+      const planPath = path.join(process.cwd(), '.tiny-cli', this.config.sessionId, 'plan', 'current_task.md');
+      try {
+        const planContent = await fs.readFile(planPath, 'utf-8');
+        systemPrompt += `\n\nCURRENT PROJECT PLAN AND TASKS:\n--------------------------------------------------\n${planContent}\n--------------------------------------------------\n
 GUIDANCE FOR PLAN EXECUTION:
 1. When you start or resume, review the task list above to see what's done and what's pending.
 2. If the user asks to "continue", verify if the most recent task is actually complete.
 3. If you find a task is completed but not marked in the list, use the \`manage_tasks\` tool with \`action: "mark_done"\` to update the list.
 4. If the user provides a request that is not in the plan, you can add it to the plan using \`manage_tasks\` with \`action: "add"\`.
 5. Always prioritize the next incomplete task in the plan.`;
-          } catch (e) {
-            // No plan found, ignore
-          }
-        }
-
-        this.messages.push({ role: "system", content: systemPrompt });
+      } catch (e) {
+        // No plan found, ignore
       }
     }
+
+    this.messages.unshift({ role: "system", content: systemPrompt });
 
     this.messages.push({ role: "user", content: userInput });
 
     const steps: AgentStep[] = [];
     let iteration = 0;
-    const maxIterations = 10;
+    const maxIterations = this.config.maxIterations || 25;
 
     while (iteration < maxIterations) {
       if (signal?.aborted) {

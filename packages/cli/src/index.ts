@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { startRepl } from './repl.js';
 import { Agent, AgentStep, SessionManager } from '@tiny-cli/core';
 import { loadConfig } from './config.js';
+import inquirer from 'inquirer';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -13,16 +14,35 @@ program
   .description('A workflow-driven CLI agent powered by small local models')
   .version('1.0.0')
   .option('-r, --resume <id>', 'Resume a specific session by ID')
+  .option('-q, --query <text>', 'Explicitly pass a query to execute and exit')
+  .option('-m, --mode <type>', 'Execution mode (agent, plan)', 'agent')
   .argument('[query...]', 'The question or task for the agent')
+  .addHelpText('after', `
+Examples:
+  $ tiny-cli                                     # Starts the interactive REPL
+  $ tiny-cli --mode plan                         # Starts the REPL in plan mode
+  $ tiny-cli "build a web app"                   # Headless execution in agent mode
+  $ tiny-cli -q "draft an architecture" -m plan  # Headless execution in plan mode
+`)
   .action(async (queryParts, options) => {
-    const query = queryParts.join(' ');
+    const positionalQuery = queryParts.join(' ');
+    const query = options.query || positionalQuery;
 
     if (!query) {
+      console.log("[DEBUG] No query provided, starting REPL...");
+      console.log(`[DEBUG] stdin.isTTY: ${process.stdin.isTTY}`);
       // No query provided, start interactive REPL
-      await startRepl(options.resume);
+      await startRepl(options.resume, options.mode);
     } else {
       // Single task execution
       const config = await loadConfig();
+
+      // Enforce auto for headless by default if notify is set
+      if (!config.permissionMode || config.permissionMode === 'notify') {
+        console.log(chalk.yellow('⚠️  Headless execution does not support "notify" mode. Overriding to "auto".'));
+        config.permissionMode = 'auto';
+      }
+
       const agent = new Agent(config);
       await agent.init();
       const sessionManager = new SessionManager();
@@ -37,10 +57,45 @@ program
         session = SessionManager.createSession(currentSessionId);
       }
 
+      agent.setSessionId(currentSessionId);
+
       console.log(chalk.dim(`Session: ${currentSessionId}`));
       const spinner = ora(chalk.cyan('Starting agent...')).start();
 
       try {
+        const onApproval = async (call: any) => {
+          spinner.stop();
+          console.log(chalk.yellow(`\n⚠️  Tool Approval Required`));
+          console.log(chalk.blue(`🔧 Tool: ${call.function.name}`));
+          console.log(chalk.dim(`Arguments: ${call.function.arguments}`));
+
+          let approved;
+          try {
+            const res = await inquirer.prompt([
+              {
+                type: 'list',
+                name: 'approved',
+                message: 'Approve this tool execution?',
+                choices: [
+                  { name: 'Approve (Run)', value: 'yes' },
+                  { name: 'Skip (Cancel)', value: 'no' },
+                  { name: 'Abort Execution', value: 'abort' }
+                ]
+              }
+            ]);
+            approved = res.approved;
+          } catch (e) {
+            return false;
+          }
+
+          if (approved === 'abort') {
+            process.exit(1);
+          }
+
+          spinner.start(chalk.cyan('Agent thinking...'));
+          return approved === 'yes';
+        };
+
         const response = await agent.run(query, (step: AgentStep) => {
           spinner.stop();
           if (step.toolCall) {
@@ -52,7 +107,7 @@ program
             }
           }
           spinner.start(chalk.cyan('Agent thinking...'));
-        }, 'agent', true); // Use continueSession: true to respect history
+        }, options.mode as 'agent' | 'plan', true, undefined, onApproval); // Use continueSession: true to respect history
 
         spinner.succeed(chalk.green('Task completed'));
         console.log(`\n - ${chalk.blue(response.content)}\n`);

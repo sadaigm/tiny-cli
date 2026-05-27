@@ -34,6 +34,7 @@ export interface McpServerConfig {
 }
 
 export type PermissionMode = 'notify' | 'auto-edit' | 'auto';
+export type LogLevel = 'TRACE' | 'DEBUG' | 'LOG' | 'ERROR';
 
 export interface AgentConfig {
   endpoint: string;
@@ -47,6 +48,8 @@ export interface AgentConfig {
   sessionId?: string;
   mcpServers?: McpServerConfig[];
   permissionMode?: PermissionMode;
+  logLevel?: LogLevel;
+  maxIterations?: number;
 }
 
 export interface ToolDefinition {

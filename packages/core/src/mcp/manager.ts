@@ -15,15 +15,31 @@ export class McpManager {
   private tools: Map<string, McpTool[]> = new Map();  // keyed by server name
   private transports: Map<string, any> = new Map(); // Store transports for cleanup
 
+  private pendingLogs: string[] = [];
+
   async connect(servers: McpServerConfig[]): Promise<void> {
     for (const server of servers) {
       try {
         await this.connectOne(server);
-        console.log(`✅ Connected to MCP server: ${server.name}`);
+        this.pendingLogs.push(`✅ Connected to MCP server: ${server.name}`);
       } catch (err) {
-        console.error(`❌ Failed to connect to MCP server ${server.name}:`, err);
+        this.pendingLogs.push(`❌ Failed to connect to MCP server ${server.name}: ${err instanceof Error ? err.message : err}`);
       }
     }
+  }
+
+  connectBackground(servers: McpServerConfig[]): void {
+    for (const server of servers) {
+      this.connectOne(server)
+        .then(() => this.pendingLogs.push(`✅ Connected to MCP server: ${server.name}`))
+        .catch(err => this.pendingLogs.push(`❌ Failed to connect to MCP server ${server.name}: ${err instanceof Error ? err.message : err}`));
+    }
+  }
+
+  flushLogs(): string[] {
+    const logs = this.pendingLogs;
+    this.pendingLogs = [];
+    return logs;
   }
 
   getDefinitions(): ToolDefinition[] {

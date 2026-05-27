@@ -11,12 +11,13 @@ export class ModelClient {
   private agent?: https.Agent;
 
   constructor(private config: AgentConfig) {
-    if (config.insecure) {
+    if (config.insecure && config.endpoint.startsWith('https:')) {
       this.agent = new https.Agent({
         rejectUnauthorized: false
       });
     }
   }
+
 
   async chat(messages: Message[], tools?: ToolDefinition[], signal?: AbortSignal): Promise<ModelResponse> {
     const payload: any = {
