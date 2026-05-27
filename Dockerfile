@@ -24,6 +24,8 @@ WORKDIR /app
 # Copy only the pruned production files from the builder
 COPY --from=builder /app/pruned ./
 
+RUN rm -rf /app/src
+
 # Install the CLI globally using npm
 RUN npm install -g .
 

@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig, PermissionMode } from '@tiny-cli/core';
+import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig, PermissionMode, LogLevel } from '@tiny-cli/core';
 
 const GLOBAL_CONFIG_DIR = path.join(os.homedir(), '.config', 'tiny-cli');
 const GLOBAL_CONFIG_FILE = path.join(GLOBAL_CONFIG_DIR, 'config.json');
@@ -21,6 +21,8 @@ interface AgentProfile {
   systemPrompt?: string;
   temperature?: number;
   permissionMode?: PermissionMode;
+  logLevel?: LogLevel;
+  maxIterations?: number;
   environment?: {
     hostUrl?: string;
     appBasePath?: string;
@@ -85,7 +87,9 @@ export async function loadConfig(): Promise<AgentConfig> {
           apiKey: env?.apiKey,
           insecure: insecure,
           mcpServers: profile.mcpServers,
-          permissionMode: profile.permissionMode
+          permissionMode: profile.permissionMode,
+          logLevel: profile.logLevel,
+          maxIterations: profile.maxIterations
         };
 
         // Merge global settings (like lastSessionId)
