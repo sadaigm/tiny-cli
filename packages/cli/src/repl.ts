@@ -3,7 +3,7 @@ import autocompletePrompt from 'inquirer-autocomplete-prompt';
 import fuzzy from 'fuzzy';
 import chalk from 'chalk';
 import ora from 'ora';
-import { Agent, AgentStep, SessionManager, Session, CommandRegistry } from '@tiny-cli/core';
+import { Agent, AgentStep, SessionManager, Session, CommandRegistry, setLogLevel, logTrace, logDebug, logError } from '@tiny-cli/core';
 import { loadConfig, saveConfig } from './config.js';
 import { handleModelCommand, handleToolsCommand } from './commands/handlers.js';
 import fs from 'fs/promises';
@@ -87,31 +87,6 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-type LogLevel = 'TRACE' | 'DEBUG' | 'LOG' | 'ERROR';
-const LEVEL_ORDER: Record<LogLevel, number> = { TRACE: 0, DEBUG: 1, LOG: 2, ERROR: 3 };
-
-let _logLevel: LogLevel = 'LOG';
-
-function setLogLevel(level: LogLevel) {
-  _logLevel = level;
-}
-
-function shouldLog(level: LogLevel): boolean {
-  return LEVEL_ORDER[level] >= LEVEL_ORDER[_logLevel];
-}
-
-function logTrace(msg: string) {
-  if (shouldLog('TRACE')) console.log(`[TRACE] ${new Date().toISOString()} ${msg}`);
-}
-
-function logDebug(msg: string) {
-  if (shouldLog('DEBUG')) console.log(`[DEBUG] ${new Date().toISOString()} ${msg}`);
-}
-
-function logError(msg: string) {
-  if (shouldLog('ERROR')) console.error(`[ERROR] ${new Date().toISOString()} ${msg}`);
 }
 
 export async function startRepl(resumeId?: string, initialMode: 'agent' | 'chat' | 'plan' = 'agent') {

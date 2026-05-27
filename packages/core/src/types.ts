@@ -49,6 +49,7 @@ export interface AgentConfig {
   mcpServers?: McpServerConfig[];
   permissionMode?: PermissionMode;
   logLevel?: LogLevel;
+  requestTimeoutMs?: number;
   maxIterations?: number;
 }
 

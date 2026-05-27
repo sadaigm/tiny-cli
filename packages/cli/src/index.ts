@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { startRepl } from './repl.js';
-import { Agent, AgentStep, SessionManager } from '@tiny-cli/core';
+import { Agent, AgentStep, SessionManager, logDebug } from '@tiny-cli/core';
 import { loadConfig } from './config.js';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
@@ -29,8 +29,7 @@ Examples:
     const query = options.query || positionalQuery;
 
     if (!query) {
-      console.log("[DEBUG] No query provided, starting REPL...");
-      console.log(`[DEBUG] stdin.isTTY: ${process.stdin.isTTY}`);
+      logDebug(`No query provided, starting REPL... stdin.isTTY: ${process.stdin.isTTY}`);
       // No query provided, start interactive REPL
       await startRepl(options.resume, options.mode);
     } else {
