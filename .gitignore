@@ -8,6 +8,7 @@ dist
 build
 logs
 .DS_Store
+*.tsbuildinfo
 # context.md
 # design.md
 # full_impl.md
