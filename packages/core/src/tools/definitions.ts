@@ -24,11 +24,21 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // bash
   const bashDef: ToolDefinition = {
     name: 'bash',
-    description: 'Execute a shell command in your environment.',
+    description: [
+      'Execute a shell command in your environment (runs through /bin/sh).',
+      '',
+      'How to use:',
+      '1. Provide a single `cmd` string. It may chain multiple commands with && ; and pipes |.',
+      '2. The FULL combined stdout+stderr of every segment is returned, even if a segment exits non-zero.',
+      '3. Non-zero exit is NOT treated as a tool failure — read the output to judge success.',
+      '',
+      'Notes: prefer dedicated tools where they fit (read a file -> `read`, find by name -> `glob`,',
+      'search contents -> `grep`). This is a mutating tool (guarded by the permission system).',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
-        cmd: { type: 'string', description: 'The command to execute' }
+        cmd: { type: 'string', description: 'The shell command(s) to execute; may chain with && ; |' }
       },
       required: ['cmd']
     },
@@ -40,11 +50,20 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return 'Tool error: cmd must be a shell command string.';
     }
     return new Promise((resolve) => {
-      exec(command as string, (err, stdout, stderr) => {
-        if (err) {
-          resolve(`Error: ${err.message}\n${stderr}`);
+      // A non-zero exit is data, not a tool failure: chains like
+      // `cd X && ls missing-file` should surface BOTH the successful echo
+      // output AND the ls stderr, so the model can read the whole picture
+      // instead of bailing on the first failing segment. Only treat a total
+      // inability to run (nothing on stdout/stderr, e.g. command not found)
+      // as a genuine error. stdout and stderr are merged like a real shell.
+      exec(command as string, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
+        if (combined) {
+          resolve(combined);
+        } else if (err) {
+          resolve(`Error: ${err.message}`);
         } else {
-          resolve(stdout || stderr || 'Command executed successfully (no output).');
+          resolve('Command executed successfully (no output).');
         }
       });
     });
