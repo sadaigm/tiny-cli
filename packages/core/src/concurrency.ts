@@ -148,3 +148,54 @@ export function classifyLockKey(
     return `__badargs:${name}:${badArgsCounter++}__`;
   }
 }
+
+/** Structural shape of a tool call (subset of the ToolCall interface), kept
+ *  local so this module has no source-tree dependencies and stays unit-testable. */
+export interface ToolCallLike {
+  id: string;
+  function: { name: string; arguments: string };
+}
+
+/** Build a short human label for a tool call, e.g. "read src/a.ts". */
+export function toolLabel(call: ToolCallLike): string {
+  let arg: any = {};
+  try {
+    arg = JSON.parse(call.function.arguments);
+  } catch {
+    arg = {};
+  }
+  const detail =
+    typeof arg?.path === "string" ? arg.path :
+    typeof arg?.pattern === "string" ? arg.pattern :
+    typeof arg?.cmd === "string" ? arg.cmd :
+    "";
+  return detail ? `${call.function.name} ${detail}` : call.function.name;
+}
+
+/** A tool's execution window in ms since some shared epoch. */
+export interface ExecWindow {
+  start: number;
+  end: number;
+}
+
+/** Maximum number of windows that overlap at any instant. >1 means some tools
+ *  ran concurrently. Uses the classic sweep-line over interval endpoints. */
+export function computeMaxConcurrency(windows: ExecWindow[]): number {
+  if (windows.length === 0) return 0;
+  const events: Array<{ t: number; delta: number }> = [];
+  for (const w of windows) {
+    events.push({ t: w.start, delta: 1 });
+    events.push({ t: w.end, delta: -1 });
+  }
+  // Sort by time; at equal times, process ends (-1) before starts (+1) so
+  // back-to-back (non-overlapping) calls don't count as concurrent.
+  events.sort((a, b) => (a.t - b.t) || (a.delta - b.delta));
+  let current = 0;
+  let max = 0;
+  for (const e of events) {
+    current += e.delta;
+    if (current > max) max = current;
+  }
+  return max;
+}
+

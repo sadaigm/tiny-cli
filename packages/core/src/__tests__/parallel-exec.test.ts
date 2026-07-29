@@ -1,4 +1,4 @@
-import { MutationGate, MutexMap, classifyLockKey } from '../concurrency';
+import { MutationGate, MutexMap, classifyLockKey, toolLabel, computeMaxConcurrency } from '../concurrency';
 
 const ctx = { sessionId: 'sess', cwd: '/repo' };
 
@@ -273,3 +273,62 @@ describe('runExec lock pattern (shared gate + per-path mutex)', () => {
     expect(fileEnter).toBeGreaterThan(bashExit);
   });
 });
+
+describe('toolLabel', () => {
+  const call = (name: string, args: any) => ({
+    id: '1',
+    function: { name, arguments: JSON.stringify(args) },
+  });
+
+  it('uses the path for path-based tools', () => {
+    expect(toolLabel(call('read', { path: 'src/a.ts' }))).toBe('read src/a.ts');
+    expect(toolLabel(call('write', { path: 'b.ts' }))).toBe('write b.ts');
+  });
+
+  it('uses the pattern for grep', () => {
+    expect(toolLabel(call('grep', { pattern: 'TODO' }))).toBe('grep TODO');
+  });
+
+  it('uses the cmd for bash', () => {
+    expect(toolLabel(call('bash', { cmd: 'ls -la' }))).toBe('bash ls -la');
+  });
+
+  it('falls back to just the name when no known arg / bad JSON', () => {
+    expect(toolLabel(call('list', {}))).toBe('list');
+    expect(toolLabel({ id: '1', function: { name: 'read', arguments: '{bad json' } })).toBe('read');
+  });
+});
+
+describe('computeMaxConcurrency', () => {
+  it('returns 0 for no windows', () => {
+    expect(computeMaxConcurrency([])).toBe(0);
+  });
+
+  it('returns 1 for a single window', () => {
+    expect(computeMaxConcurrency([{ start: 0, end: 10 }])).toBe(1);
+  });
+
+  it('returns 1 for back-to-back (non-overlapping) windows', () => {
+    expect(computeMaxConcurrency([
+      { start: 0, end: 10 },
+      { start: 10, end: 20 },
+    ])).toBe(1);
+  });
+
+  it('counts overlaps: three fully-overlapping windows => 3', () => {
+    expect(computeMaxConcurrency([
+      { start: 0, end: 30 },
+      { start: 5, end: 25 },
+      { start: 10, end: 20 },
+    ])).toBe(3);
+  });
+
+  it('counts partial overlap', () => {
+    expect(computeMaxConcurrency([
+      { start: 0, end: 15 },
+      { start: 10, end: 30 },
+      { start: 20, end: 40 },
+    ])).toBe(2);
+  });
+});
+

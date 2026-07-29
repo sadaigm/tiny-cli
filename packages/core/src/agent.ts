@@ -20,6 +20,8 @@ import {
   MutationGate,
   MutexMap,
   classifyLockKey,
+  toolLabel,
+  computeMaxConcurrency,
   BASH_LOCK,
   MCP_LOCK,
 } from "./concurrency.js";
@@ -192,7 +194,10 @@ GUIDANCE FOR PLAN EXECUTION:
       });
 
       if (response.tool_calls && response.tool_calls.length > 0) {
-        console.log(`[Agent] Executing ${response.tool_calls.length} tool calls...`);
+        console.log(
+          `[Agent] Executing ${response.tool_calls.length} tool call(s) in parallel ` +
+          `(independent calls run concurrently; conflicting calls serialize)...`
+        );
 
         // The tool calls returned by the model in this batch, in order.
         const toolCalls = response.tool_calls;
@@ -292,6 +297,10 @@ GUIDANCE FOR PLAN EXECUTION:
         const pathMutex = new MutexMap();
         const execContext = { sessionId: this.config.sessionId, cwd: process.cwd() };
 
+        // Execution windows [startMs, endMs] per entry index, used to report
+        // observed concurrency for this batch.
+        const execWindows: Array<{ index: number; start: number; end: number; name: string }> = [];
+
         /** Run a single tool call (no locking). Always resolves, capturing
          *  errors as a Tool Error string. */
         const runOne = async (
@@ -299,7 +308,9 @@ GUIDANCE FOR PLAN EXECUTION:
           ctx: { sessionId?: string; cwd: string },
           sig?: AbortSignal
         ): Promise<ExecResult> => {
+          const label = toolLabel(entry.call);
           const t0 = performance.now();
+          console.log(`[Agent] ▶ start ${label}`);
           let result: string;
           try {
             let parsedArgs: any = {};
@@ -317,9 +328,12 @@ GUIDANCE FOR PLAN EXECUTION:
             result = `Tool Error: ${error.message}`;
             console.error(`[Agent] Tool execution failed: ${error.message}`);
           }
+          const toolCallMs = performance.now() - t0;
+          execWindows.push({ index: entry.index, start: t0, end: t0 + toolCallMs, name: entry.call.function.name });
+          console.log(`[Agent] ✔ done ${label} [${Math.round(toolCallMs)}ms]`);
           return {
             result,
-            toolCallMs: performance.now() - t0,
+            toolCallMs,
             aborted: !!sig?.aborted,
           };
         };
@@ -354,7 +368,26 @@ GUIDANCE FOR PLAN EXECUTION:
 
         // Dispatch EXEC entries; DENIED/REDUNDANT are resolved synchronously.
         const execEntries = plan.filter(p => p.kind === "EXEC");
+        const batchStart = performance.now();
         const settled = await Promise.allSettled(execEntries.map(e => runExec(e)));
+        const batchWallMs = performance.now() - batchStart;
+
+        // Report observed concurrency for this batch: wall-clock vs the sum of
+        // individual tool times, and the max number of tools whose execution
+        // windows overlapped. If wall-clock ≈ sum and max concurrency == 1,
+        // the batch ran sequentially (all calls conflicted); if max
+        // concurrency > 1, they ran in parallel.
+        if (execEntries.length > 0) {
+          const sumMs = execWindows.reduce((acc, w) => acc + (w.end - w.start), 0);
+          const maxConcurrency = computeMaxConcurrency(execWindows);
+          console.log(
+            `[Agent] Batch done: ${execEntries.length} tools, ` +
+            `max concurrency ${maxConcurrency}, ` +
+            `wall-clock ${Math.round(batchWallMs)}ms ` +
+            `(sum of tools ${Math.round(sumMs)}ms` +
+            `${sumMs > 0 ? `, ${Math.round((batchWallMs / sumMs) * 100)}% of sum` : ""})`
+          );
+        }
 
         // Collect all results into a sparse array indexed by original position.
         const results: Record<number, ExecResult> = {};
