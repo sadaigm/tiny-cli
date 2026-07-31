@@ -9,6 +9,7 @@ A powerful, lightweight agentic AI coding assistant that supports any model via 
 
 ## 🌟 Key Features
 
+- **⚡ Parallel Tool Execution**: When the model returns multiple tool calls in one response, independent calls run **concurrently** (parallel reads/greps, edits to *different* files), while conflicting calls (same-file writes, `bash`, `mcp__*`) serialize automatically. See [Parallel Tool Execution](#-parallel-tool-execution).
 - **🤖 Autonomous Agent Mode**: A sophisticated execution loop that cycles through *Research* → *Plan* → *Act* → *Verify*.
 - **🔌 MCP Client Integration**: Built-in support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Background connections don't block the REPL.
 - **🧠 Smart Context Management**: Automatic memory compaction handles long-running sessions (35k token trigger).
@@ -17,6 +18,7 @@ A powerful, lightweight agentic AI coding assistant that supports any model via 
 - **📜 Hierarchical Slash Commands**: Nested command engine for managing sessions, models, and tools.
 - **🔧 Configurable Logging**: Log levels (`TRACE`, `DEBUG`, `LOG`, `ERROR`) via `agents.json`.
 - **⏱️ Request Timeout**: Built-in timeout (default: 120s) prevents indefinite hangs on stalled model requests.
+- **🛠 Hardened Built-in Tools**: Shell-injection-safe `bash`/`grep`/`glob` with extended-regex `grep`, native recursive `glob`, and full combined output on any exit code. See [Built-in Tools](#-built-in-tools).
 
 ---
 
@@ -97,6 +99,94 @@ Typing `@` triggers a high-performance workspace indexer.
 - **Transport Support**: Supports both `stdio` (local processes) and `http` (remote HTTP/SSE) transports.
 
 To manage servers, use the `/mcp` command to list, connect, or disconnect servers in real-time.
+
+---
+
+## ⚡ Parallel Tool Execution
+
+When the model returns multiple tool calls in a single response (a "batch"), `tiny-cli` executes them **in parallel** instead of one at a time. Independent operations (parallel reads, parallel greps, edits to *different* files) run concurrently to cut wall-clock time, while operations that would corrupt each other are automatically serialized.
+
+This is invisible to the model — results are committed in the original call order so every `tool_call_id` pairs correctly with the assistant message.
+
+### How a batch is processed
+
+Each batch runs through four phases in `packages/core/src/agent.ts`:
+
+```mermaid
+graph LR
+    P0[Phase 0: Snapshot dedupe baseline] --> P1[Phase 1: Sequential gating]
+    P1 -->|dedupe + permission prompts, in order| P2[Phase 2: Concurrent execution]
+    P2 -->|Promise.allSettled + lock grouping| P3[Phase 3: Ordered commit]
+    P3[/Append tool messages in call order/]
+```
+
+| Phase | What happens |
+|:---|:---|
+| **0 — Snapshot** | Freeze the dedupe baseline from prior steps so redundant calls are detected. |
+| **1 — Gating** *(sequential, in index order)* | Per call: block exact duplicates (pre-batch or within-batch), then run interactive permission prompts one at a time (prompts never overlap). `permissionMode` is re-read each iteration so an "Approve (Session)" choice flips the rest of the batch to auto-run. |
+| **2 — Concurrent execution** | Approved, non-redundant calls are dispatched with `Promise.allSettled` (one rejection never discards the others). Calls touching the same resource serialize via per-key locks; everything else runs in parallel. |
+| **3 — Ordered commit** | Results are appended as `tool` messages in original call order; abort handling commits up to the aborted index and back-fills the rest so no `tool_call_id` is left dangling. |
+
+### Concurrency model
+
+Coordination lives in `packages/core/src/concurrency.ts` (no external dependencies). Each mutating call is assigned a **lock key**:
+
+| Tool | Lock key | Runs concurrently with |
+|:---|:---|:---|
+| `read`, `list`, `grep`, `glob` | _(bypass — fully parallel)_ | everything |
+| `write`, `search_replace`, `insert_lines`, `plan_write` | resolved **file path** | all calls except the same path |
+| `manage_tasks`, `mark_task_complete` | shared `current_task.md` path | each other (they both read-modify-write the same file) |
+| `bash` | `__bash__` (exclusive) | **nothing** mutating — unbounded reach |
+| `mcp__*` | `__mcp__` (exclusive) | read-only tools only |
+
+Under the hood: an async **reader/writer lock** (`MutationGate`) admits file mutations as *shared* (parallel) but `bash`/`mcp` as *exclusive* (serialized against all mutations), with a per-path **mutex** (`MutexMap`) so two writes to the same file never interleave. Exclusive acquires are preferred when idle to avoid starving `bash`/`mcp`.
+
+### Observing it in the logs
+
+Every batch prints a start notice, per-tool start/done lines, and a summary so you can see whether calls ran in parallel:
+
+```
+[Agent] Executing 3 tool call(s) in parallel (independent calls run concurrently; conflicting calls serialize)...
+[Agent] ▶ start read src/agent.ts
+[Agent] ▶ start read src/concurrency.ts
+[Agent] ▶ start grep fetchModels packages/cli/src
+[Agent] ✔ done read src/agent.ts [12ms]
+[Agent] ✔ done read src/concurrency.ts [9ms]
+[Agent] ✔ done grep fetchModels packages/cli/src [24ms]
+[Agent] Batch done: 3 tools, max concurrency 3, wall-clock 24ms (sum of tools 45ms, 53% of sum)
+```
+
+`max concurrency > 1` means tools ran in parallel; if `max concurrency == 1` and wall-clock ≈ sum, the batch ran sequentially (all calls conflicted). The `wall-clock / sum` ratio shows the speedup.
+
+> **Scope:** only the *inner* batch is parallelized. The outer plan-task loop (`Executing task 1/57`, one `agent.run()` per plan task in the REPL) stays sequential, because plan tasks are dependent and share state.
+
+---
+
+## 🛠 Built-in Tools
+
+All tools are defined in `packages/core/src/tools/definitions.ts`. The mutating tools are guarded by the permission system and the concurrency model above.
+
+| Tool | Description | Mutating? |
+|:---|:---|:---:|
+| `bash` | Execute a shell command (may chain `&&`/`;`/`\|`). Returns **full combined stdout+stderr on any exit code** — non-zero exit is data, not a failure. | ✅ |
+| `read` | Read a file (first 250 lines, a range, or last 100 lines). | |
+| `write` | Create/overwrite a file. | ✅ |
+| `search_replace` | Replace a string within a file (exact match required). | ✅ |
+| `insert_lines` | Insert lines at a specific line number. | ✅ |
+| `list` | List directory contents. | |
+| `grep` | Search file **contents** — extended regex (ERE), recursive, source-files-only. | |
+| `glob` | Find files by **name/path** — native recursive `**` matching, no shell. | |
+| `plan_write` | Write/replace the active plan file. | ✅ |
+| `manage_tasks` | Manage the task list (the `current_task.md` plan file). | ✅ |
+| `mark_task_complete` | Mark a task complete (read-modify-writes `current_task.md`). | ✅ |
+
+### Tool hardening (`bash` / `grep` / `glob`)
+
+These three tools were hardened against three classes of bugs:
+
+- **`grep`** — runs `grep -rInE` with arguments passed as an array (`execFile`, no shell), so model patterns using `|` alternation work (extended regex), and **exit code 1 (no matches) is treated as "No matches found."** instead of an error. Scoped to source files via `--include`.
+- **`glob`** — uses Node's native `fs.promises.glob` instead of a shell `ls`, giving real recursive `**` matching and eliminating shell injection. Returns "No files found." cleanly on no hits.
+- **`bash`** — merges stdout and stderr and returns the **entire combined output** regardless of exit code, so a chain like `cd X && ls missing-file` surfaces *both* the successful output and the `ls` error (previously it bailed on the first non-zero segment). `maxBuffer` raised to 10 MB to avoid truncating large listings.
 
 ---
 
@@ -226,7 +316,10 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
 
 ## 🏗 Project Structure
 
-- `packages/core`: Core agent engine, model client, tool registry, MCP manager, and logger.
+- `packages/core`: Core agent engine, model client, tool registry, MCP manager, logger, and the concurrency/parallel-execution layer.
+  - `src/agent.ts` — the agentic loop and the 4-phase parallel batch processor.
+  - `src/concurrency.ts` — `MutationGate` (reader/writer lock), `MutexMap` (per-path mutex), and lock-key classification. No external dependencies.
+  - `src/tools/definitions.ts` — all built-in tools and their permission/locking metadata.
 - `packages/cli`: Interactive REPL, command handlers, and file mention system.
 
 ## 📄 License
