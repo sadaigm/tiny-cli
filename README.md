@@ -12,7 +12,7 @@ A powerful, lightweight agentic AI coding assistant that supports any model via 
 - **⚡ Parallel Tool Execution**: When the model returns multiple tool calls in one response, independent calls run **concurrently** (parallel reads/greps, edits to *different* files), while conflicting calls (same-file writes, `bash`, `mcp__*`) serialize automatically. See [Parallel Tool Execution](#-parallel-tool-execution).
 - **🤖 Autonomous Agent Mode**: A sophisticated execution loop that cycles through *Research* → *Plan* → *Act* → *Verify*.
 - **🔌 MCP Client Integration**: Built-in support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Background connections don't block the REPL.
-- **🧠 Smart Context Management**: Automatic memory compaction handles long-running sessions (35k token trigger).
+- **🧠 Smart Context Management**: Automatic memory compaction handles long-running sessions (35k token trigger, configurable).
 - **📎 File Mentions (`@filename`)**: Instant context injection with fuzzy-search.
 - **🛡️ Permission-Based Execution**: Secure execution with configurable modes (`notify`, `auto-edit`, `auto`).
 - **📜 Hierarchical Slash Commands**: Nested command engine for managing sessions, models, and tools.
@@ -194,9 +194,9 @@ These three tools were hardened against three classes of bugs:
 
 To prevent "hallucination" and performance degradation in long sessions, `tiny-cli` implements **Memory Compaction**.
 
-1.  **Threshold Detection**: When the session exceeds **35,000 tokens**.
+1.  **Threshold Detection**: When the session exceeds the compaction threshold (**35,000 tokens** by default; configurable via `compactionThresholdTokens`).
 2.  **Context Analysis**: The agent identifies "stale" conversation segments that are no longer relevant to the current task.
-3.  **Summarization**: Old segments are summarized into high-density "Memory Notes," while the most recent **10,000 tokens** are kept in raw form.
+3.  **Summarization**: Old segments are summarized into high-density "Memory Notes," while the most recent tokens are kept in raw form (**8,000 tokens** by default; configurable via `compactionRetainTokens`).
 4.  **Preservation**: System prompts and critical project context are never summarized.
 
 ---
@@ -265,6 +265,8 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
   "permissionMode": "notify",
   "logLevel": "LOG",
   "maxIterations": 50,
+  "compactionThresholdTokens": 35000,
+  "compactionRetainTokens": 8000,
   "environment": {
     "hostUrl": "http://localhost:11434",
     "appBasePath": "/v1",
@@ -297,6 +299,8 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
 | `permissionMode` | `notify` (ask), `auto-edit` (auto files, ask bash), `auto` (no prompts) | `notify` |
 | `logLevel` | `TRACE`, `DEBUG`, `LOG`, `ERROR` | `LOG` |
 | `maxIterations` | Max agent loop iterations per query | Unlimited |
+| `compactionThresholdTokens` | Token count that triggers memory compaction | `35000` |
+| `compactionRetainTokens` | Recent tokens kept raw (un-summarized) during compaction | `8000` |
 | `environment.hostUrl` | Model API base URL | `http://localhost:11434` |
 | `environment.appBasePath` | API path prefix | `/v1` |
 | `environment.apiKey` | API key for authenticated endpoints | `none` |

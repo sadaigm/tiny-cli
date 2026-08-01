@@ -558,20 +558,21 @@ GUIDANCE FOR PLAN EXECUTION:
   }
 
   private async compactMemoryIfNeeded(signal?: AbortSignal) {
+    const compactionThreshold = this.config.compactionThresholdTokens ?? 35000;
     const stats = this.getContextStats();
-    if (stats.tokens <= 35000) {
+    if (stats.tokens <= compactionThreshold) {
       return;
     }
 
-    console.log(`\n[Agent] Context size (${stats.tokens} tokens) exceeds 35,000. Compacting memory...`);
+    console.log(`\n[Agent] Context size (${stats.tokens} tokens) exceeds ${compactionThreshold.toLocaleString()}. Compacting memory...`);
 
     const systemMessages = this.messages.filter(m => m.role === 'system');
     const nonSystemMessages = this.messages.filter(m => m.role !== 'system');
 
     const encoder = getEncoding("cl100k_base");
-    
+
     let retainedTokens = 0;
-    const targetRetainedTokens = 8000;
+    const targetRetainedTokens = this.config.compactionRetainTokens ?? 8000;
     
     let retainIndex = nonSystemMessages.length;
     for (let i = nonSystemMessages.length - 1; i >= 0; i--) {
