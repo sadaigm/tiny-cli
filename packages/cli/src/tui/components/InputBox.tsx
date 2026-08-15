@@ -84,13 +84,6 @@ const MODE_LABELS: Record<TuiMode, string> = {
   plan: 'plan',
 };
 
-/** Human-readable hint for the current agent state. */
-const STATE_HINTS: Partial<Record<AgentState, string>> = {
-  running: ' (agent working — your message will be queued)',
-  awaiting_approval: ' (awaiting approval)',
-  error: ' (error — press Enter to retry)',
-};
-
 /**
  * Renders the always-live text input at the bottom of the TUI.
  *
@@ -122,7 +115,7 @@ const STATE_HINTS: Partial<Record<AgentState, string>> = {
  * />
  * ```
  */
-export default function InputBox({
+function InputBox({
   onSubmit,
   mode,
   agentState,
@@ -219,6 +212,9 @@ export default function InputBox({
    * common case.
    */
   const handlePaste = useCallback((text: string) => {
+    // While blurred (browse mode / modal overlay), ignore pastes — the box
+    // doesn't own the keyboard, so the draft must not change underneath it.
+    if (!focus) return;
     // Normalise line endings up front: pastes may carry \r\n or bare \r, and a
     // bare \r overstrikes when the expanded text is later printed. Storing \n
     // keeps the content semantically identical but display-safe.
@@ -519,7 +515,6 @@ export default function InputBox({
 
   const modeColor = modeColors()[mode];
   const modeLabel = MODE_LABELS[mode];
-  const stateHint = STATE_HINTS[agentState];
 
   return (
     <Box flexDirection="column">
@@ -565,7 +560,6 @@ export default function InputBox({
           </Box>
         </Box>
       )}
-      {stateHint ? <Text dimColor>{stateHint}</Text> : null}
       {/* Slash-command picker (takes priority over the mention picker —
           `/` and `@` detection are mutually exclusive). */}
       {slashActive && slashItems.length > 0 ? (
@@ -592,3 +586,9 @@ export default function InputBox({
     </Box>
   );
 }
+
+// Memoize so streaming log deltas don't re-render the input row (its siblings
+// Header/StatusBar/MessageLog are memoized the same way). Props are stable
+// across streaming: mode/agentState are primitives, callbacks are useCallback'd
+// or useState setters, fileIndex is loaded once.
+export default React.memo(InputBox);

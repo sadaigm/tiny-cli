@@ -11,6 +11,7 @@ import React, {
 import { Box, Text, useInput, useStdout } from 'ink';
 import type { LogEntry } from '../state.js';
 import MessageItem, { MAX_STANDARD_BODY_LINES } from './MessageItem.js';
+import { summarizeToolCall, summarizeToolResult } from '../utils/toolSummary.js';
 import { copyToClipboard, entryClipboardText } from '../utils/clipboard.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
 
@@ -117,30 +118,47 @@ function logViewReducer(state: LogView, action: LogViewAction): LogView {
 const BODY_INDENT = 3;
 
 /**
+ * Count the rendered lines of a text block: each explicit newline is its
+ * own line, plus soft-wrap chunks for lines longer than `usable` columns
+ * (matching `wrapIndent`'s hard character chunking).
+ */
+function wrappedLineCount(text: string, usable: number): number {
+  return text
+    .split(/\r?\n/)
+    .reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / usable)), 0);
+}
+
+/**
  * Estimate the terminal lines a single entry occupies when rendered.
  *
  * Must stay in sync with how {@link MessageItem} actually renders, or the
  * viewport math will pack the wrong number of entries and the pane will
- * overflow/clip (visible as flicker/jump).
+ * overflow/clip (visible as flicker/jump, or a pane that appears stuck
+ * when an expanded entry dwarfs the viewport).
  *
- * - tool_call / tool_result: 1 line when collapsed (summary).
+ * - tool_call / tool_result: 1 line when collapsed (summary); when
+ *   expanded, 1 header line + the wrapped detail block from the same
+ *   summarizer the renderer uses (same cap, same text).
  * - user / assistant: 1 header line + body lines wrapped at
- *   `columns - BODY_INDENT` (matching `wrapIndent`'s indent).
+ *   `columns - BODY_INDENT` (matching `wrapIndent`'s indent); collapsed
+ *   bodies cap at MAX_STANDARD_BODY_LINES, expanded bodies do not.
  * - system / info / error: treated like a wrapped body line.
  */
-function estimateLines(entry: LogEntry, columns: number): number {
-  if (entry.type === 'tool_call' || entry.type === 'tool_result') return 1;
+function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>): number {
   const usable = Math.max(1, columns - BODY_INDENT);
+  if (entry.type === 'tool_call' || entry.type === 'tool_result') {
+    if (!expanded.has(entry.id)) return 1;
+    const detail =
+      entry.type === 'tool_call'
+        ? summarizeToolCall(entry, columns).detail
+        : summarizeToolResult(entry, columns).detail;
+    return 1 + (detail ? wrappedLineCount(detail, usable) : 0);
+  }
   // Count rendered lines: each explicit newline is its own line, plus
   // soft-wrap for lines longer than the usable width. Collapsed standard
   // entries cap at MAX_STANDARD_BODY_LINES (matching MessageItem's render).
-  const rawBodyLines =
-    entry.content.length === 0
-      ? 0
-      : entry.content
-          .split(/\r?\n/)
-          .reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / usable)), 0);
-  const bodyLines = Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
+  const rawBodyLines = entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
+  const bodyLines = expanded.has(entry.id) ? rawBodyLines : Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
   // user/assistant have a header row ("❯ You:" / "🤖 Agent:"); others are body-only.
   const headerLines = entry.type === 'user' || entry.type === 'assistant' ? 1 : 0;
   return Math.max(1, headerLines + bodyLines);
@@ -167,6 +185,7 @@ function computeWindow(
   paneHeight: number,
   columns: number,
   autoFollow: boolean,
+  expanded: Set<string>,
 ): Window {
   const n = entries.length;
   if (n === 0 || paneHeight <= 1) {
@@ -178,7 +197,7 @@ function computeWindow(
     let start = n;
     let used = 0;
     for (let i = n - 1; i >= 0; i--) {
-      const cost = estimateLines(entries[i], columns);
+      const cost = estimateLines(entries[i], columns, expanded);
       if (used + cost > budget && start < n) break;
       used += cost;
       start = i;
@@ -190,18 +209,18 @@ function computeWindow(
   const budget = paneHeight - 1;
   let start = focusIndex;
   let end = focusIndex + 1;
-  let used = estimateLines(entries[focusIndex], columns);
+  let used = estimateLines(entries[focusIndex], columns, expanded);
 
   // Grow downward.
   while (end < n && used < budget) {
-    const cost = estimateLines(entries[end], columns);
+    const cost = estimateLines(entries[end], columns, expanded);
     if (used + cost > budget) break;
     used += cost;
     end++;
   }
   // Grow upward.
   while (start > 0 && used < budget) {
-    const cost = estimateLines(entries[start - 1], columns);
+    const cost = estimateLines(entries[start - 1], columns, expanded);
     if (used + cost > budget) break;
     used += cost;
     start--;
@@ -286,23 +305,37 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     [onBrowseModeChange],
   );
 
+  // Mirror the values onPaneKey branches on into refs. useInput keeps calling
+  // the handler instance that was subscribed, so closures over render state
+  // go stale (Ctrl+P flipped browseMode in the parent, but the pane handler
+  // still saw false → arrows/Tab did nothing). Refs are stable boxes: even a
+  // stale handler reads the live value through .current.
+  const browseModeRef = useRef(browseMode);
+  browseModeRef.current = browseMode;
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  const focusIndexRef = useRef(view.focusIndex);
+  focusIndexRef.current = view.focusIndex;
+  const paneHeightRef = useRef(paneHeight);
+  paneHeightRef.current = paneHeight;
+
   // Single always-on listener (when the pane is the active context).
   // Using ONE useInput — rather than two toggling ones — keeps Ink's raw
   // mode enabled exactly once and avoids raw-mode churn that can drop the
   // stdin readable listener and kill all input.
   const onPaneKey = useCallback(
     (input: string, key: { ctrl?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean }) => {
-      const n = entries.length;
+      const n = entriesRef.current.length;
 
       // The browse-mode hotkey (Ctrl+P by default, remappable via keys.json)
       // toggles from either state.
       if (matchesBinding(input, key, bindingFor('browse'))) {
-        setBrowse(!browseMode);
+        setBrowse(!browseModeRef.current);
         return;
       }
       // Inside browse mode: arrows/Tab/Home/End/PgUp/PgDn drive the pane;
       // Esc or Enter exits browse mode back to typing.
-      if (browseMode) {
+      if (browseModeRef.current) {
         if (key.escape || key.return) {
           setBrowse(false);
           return;
@@ -310,15 +343,15 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         if (n === 0) return;
         if (key.upArrow) dispatch({ type: 'FOCUS_DELTA', delta: -1, length: n });
         else if (key.downArrow) dispatch({ type: 'FOCUS_DELTA', delta: 1, length: n });
-        else if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeight - 1), length: n });
-        else if (key.pageDown) dispatch({ type: 'FOCUS_DELTA', delta: paneHeight - 1, length: n });
+        else if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeightRef.current - 1), length: n });
+        else if (key.pageDown) dispatch({ type: 'FOCUS_DELTA', delta: paneHeightRef.current - 1, length: n });
         else if (key.tab) {
-          const focusedId = entries[view.focusIndex]?.id;
+          const focusedId = entriesRef.current[focusIndexRef.current]?.id;
           if (focusedId) dispatch({ type: 'TOGGLE_EXPAND', id: focusedId });
         } else if (matchesBinding(input, key, bindingFor('yank'))) {
           // Yank: OSC 52 copy of the focused entry's raw content (tool
           // args/result, or message text) to the local clipboard.
-          const focused = entries[view.focusIndex];
+          const focused = entriesRef.current[focusIndexRef.current];
           if (focused) {
             const text = entryClipboardText(focused);
             const ok = copyToClipboard(text);
@@ -332,7 +365,10 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       // Outside browse mode this hook claims nothing — printable chars,
       // arrows, and Tab all pass through to the InputBox unchanged.
     },
-    [browseMode, setBrowse, entries, view.focusIndex, paneHeight],
+    // Intentionally minimal: all branched-on values are read through refs
+    // (see above), so re-creating the callback on every change is pointless —
+    // useInput wouldn't pick up the new instance anyway.
+    [setBrowse],
   );
   useInput(onPaneKey, { isActive: active });
 
@@ -358,8 +394,8 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
 
   // Compute the visible window — memoised on relevant inputs.
   const win = useMemo(
-    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow),
-    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow],
+    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded),
+    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded],
   );
 
   const visibleEntries = entries.slice(win.startIndex, win.endIndex);

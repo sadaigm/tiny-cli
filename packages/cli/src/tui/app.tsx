@@ -226,6 +226,10 @@ export default function App({
   const [searchActive, setSearchActive] = React.useState(false);
   const searchActiveRef = React.useRef(false);
   searchActiveRef.current = searchActive;
+  // Mirrored in a ref for the same reason: the global Esc handler reads it
+  // synchronously to know when browse mode owns Esc.
+  const browseModeRef = React.useRef(false);
+  browseModeRef.current = browseMode;
   useEffect(() => {
     let cancelled = false;
     buildFileIndex(process.cwd())
@@ -788,6 +792,8 @@ export default function App({
     if (stateRef.current.pendingSelector) return;
     // Ctrl+R search owns Esc (cancel search) — must not abort the turn.
     if (searchActiveRef.current) return;
+    // Browse mode owns Esc too (exit browse back to typing).
+    if (browseModeRef.current) return;
 
     // Ctrl+S (or its remap) opens the session switcher.
     if (matchesBinding(input, key, bindingFor('sessionSwitcher'))) {
@@ -914,15 +920,18 @@ export default function App({
         </Box>
       </Box>
 
-      {/* MIDDLE: input box — always live, except hidden during browse mode
-          so the conversation pane owns arrows/Tab without key conflicts,
-          and blurred while a modal overlay owns the keyboard (its
-          quick-select keys y/s/n/a must not land in the text draft). */}
+      {/* MIDDLE: input box — always mounted; unmounting would tear down
+          useInput's raw-mode cleanup and kill all keyboard input. In browse
+          mode we show the banner and blur the input so the conversation pane
+          owns arrows/Tab without key conflicts; also blurred while a modal
+          overlay owns the keyboard (its quick-select keys y/s/n/a must not
+          land in the text draft). */}
       {browseMode ? (
         <Box height={inputHeight}>
           <Text dimColor> BROWSE MODE — Esc or Enter to resume typing</Text>
         </Box>
-      ) : (
+      ) : null}
+      <Box display={browseMode ? 'none' : 'flex'}>
         <InputBox
           mode={state.mode}
           agentState={state.agentState}
@@ -931,9 +940,9 @@ export default function App({
           fileIndex={fileIndex}
           onMentionActiveChange={setMentionActive}
           onSearchActiveChange={setSearchActive}
-          focus={!state.pendingApproval && !state.pendingRecovery && !state.pendingSelector}
+          focus={!browseMode && !state.pendingApproval && !state.pendingRecovery && !state.pendingSelector}
         />
-      )}
+      </Box>
 
       {/* BOTTOM: agent details (banner + Model/Session + status) — fixed height */}
       <Box flexDirection="column" height={bottomBoxHeight} borderStyle="single" borderColor="gray">
