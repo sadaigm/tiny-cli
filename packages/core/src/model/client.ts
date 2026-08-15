@@ -28,7 +28,26 @@ export class ModelClient {
   }
 
 
-  async chat(messages: Message[], tools?: ToolDefinition[], signal?: AbortSignal): Promise<ModelResponse> {
+  async chat(
+    messages: Message[],
+    tools?: ToolDefinition[],
+    signal?: AbortSignal,
+    onText?: (delta: string) => void,
+  ): Promise<ModelResponse> {
+    // Streaming mode: when the caller wants incremental text, consume the
+    // SSE endpoint and reassemble both content and tool-call fragments
+    // (OpenAI-compatible streams deliver tool arguments in chunks). Any
+    // stream failure falls back to the buffered request below, so
+    // `onText` can only add liveness, never break a turn.
+    if (onText) {
+      try {
+        return await this.chatStreamed(messages, tools, signal, onText);
+      } catch (err: any) {
+        if (err.name === 'AbortError' || signal?.aborted) throw err;
+        logTrace(`chat() — stream failed (${err.message}), falling back to buffered`);
+      }
+    }
+
     const payload: any = {
       model: this.config.model,
       messages,
@@ -76,6 +95,95 @@ export class ModelClient {
     return {
       content: data.choices[0].message.content || '',
       tool_calls: data.choices[0].message.tool_calls
+    };
+  }
+
+  /**
+   * Streaming variant of {@link chat}: consumes the SSE endpoint, emits
+   * content deltas through `onText` as they arrive, and reassembles the
+   * full response (including tool calls whose JSON arguments arrive in
+   * fragments) to return the same shape as `chat()`.
+   */
+  private async chatStreamed(
+    messages: Message[],
+    tools: ToolDefinition[] | undefined,
+    signal: AbortSignal | undefined,
+    onText: (delta: string) => void,
+  ): Promise<ModelResponse> {
+    const payload: any = {
+      model: this.config.model,
+      messages,
+      temperature: this.config.temperature ?? 0.2,
+      stream: true,
+    };
+    if (tools && tools.length > 0) {
+      payload.tools = tools.map((t) => ({ type: 'function', function: t }));
+    }
+
+    const response = await fetch(`${this.config.endpoint}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.config.apiKey || 'none'}`,
+      },
+      body: JSON.stringify(payload),
+      agent: this.agent,
+      signal: this.combinedSignal(signal),
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Model stream error: ${response.statusText}`);
+    }
+
+    // Tool-call fragments keyed by their stream index: name + argument
+    // chunks concatenated until the stream ends.
+    const toolCalls: { index: number; id: string; name: string; args: string }[] = [];
+    let content = '';
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+        let delta: any;
+        try {
+          delta = JSON.parse(line.slice(6));
+        } catch {
+          continue; // split JSON — remainder is in the buffer
+        }
+        const choice = delta.choices?.[0];
+        if (!choice) continue;
+        const piece = choice.delta?.content;
+        if (piece) {
+          content += piece;
+          onText(piece);
+        }
+        const tc = choice.delta?.tool_calls?.[0];
+        if (tc) {
+          let slot = toolCalls.find((s) => s.index === (tc.index ?? 0));
+          if (!slot) {
+            slot = { index: tc.index ?? 0, id: tc.id ?? '', name: '', args: '' };
+            toolCalls.push(slot);
+          }
+          if (tc.id) slot.id = tc.id;
+          if (tc.function?.name) slot.name += tc.function.name;
+          if (tc.function?.arguments) slot.args += tc.function.arguments;
+        }
+      }
+    }
+
+    return {
+      content,
+      tool_calls: toolCalls.length
+        ? toolCalls.map((s) => ({
+            id: s.id,
+            type: 'function',
+            function: { name: s.name, arguments: s.args },
+          }))
+        : undefined,
     };
   }
 

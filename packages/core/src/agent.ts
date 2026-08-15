@@ -76,7 +76,8 @@ export class Agent {
     mode: 'agent' | 'chat' | 'plan' = 'agent',
     continueSession: boolean = false,
     signal?: AbortSignal,
-    onApproval?: (call: ToolCall) => Promise<boolean>
+    onApproval?: (call: ToolCall) => Promise<boolean>,
+    onText?: (delta: string) => void
   ): Promise<AgentResponse> {
     if (!continueSession) {
       this.messages = [];
@@ -168,7 +169,8 @@ GUIDANCE FOR PLAN EXECUTION:
         response = await this.model.chat(
           this.messages,
           toolDefinitions,
-          signal
+          signal,
+          onText
         );
       } catch (error: any) {
         if (error.name === 'AbortError' || signal?.aborted) {
@@ -183,6 +185,16 @@ GUIDANCE FOR PLAN EXECUTION:
         content: response.content,
         tool_calls: response.tool_calls,
       });
+
+      // A streamed turn with no tool calls is final — the caller has
+      // already seen every delta, so don't re-emit the full text.
+      if (
+        onText &&
+        (!response.tool_calls || response.tool_calls.length === 0) &&
+        response.content
+      ) {
+        (response as { streamedFinal?: boolean }).streamedFinal = true;
+      }
 
       if (response.tool_calls && response.tool_calls.length > 0) {
         console.log(`[Agent] Executing ${response.tool_calls.length} tool calls...`);
@@ -281,7 +293,10 @@ GUIDANCE FOR PLAN EXECUTION:
         return {
           content: response.content,
           steps,
-        };
+          // Marks a turn whose text was already delivered incrementally —
+          // the UI checks this to avoid re-appending the full blob.
+          streamedFinal: (response as { streamedFinal?: boolean }).streamedFinal === true,
+        } as AgentResponse;
       }
     }
 
@@ -339,29 +354,44 @@ GUIDANCE FOR PLAN EXECUTION:
     };
   }
 
-  private async compactMemoryIfNeeded(signal?: AbortSignal) {
+  /**
+   * Force a memory compaction now, ignoring the 35k-token threshold.
+   *
+   * Summarises the oldest history into a single `[PREVIOUS CONTEXT
+   * SUMMARY]` system message, keeping the most recent ~8k tokens verbatim.
+   * Returns the new context size in tokens, or null when there was
+   * nothing to summarise (all history already fits the retention budget).
+   * Exposed so the TUI's `/compact` command can trigger it on demand.
+   */
+  async compactNow(signal?: AbortSignal): Promise<number | null> {
+    return this.compactMemoryIfNeeded(signal, true);
+  }
+
+  private async compactMemoryIfNeeded(signal?: AbortSignal, force = false): Promise<number | null> {
     const stats = this.getContextStats();
-    if (stats.tokens <= 35000) {
-      return;
+    if (!force && stats.tokens <= 35000) {
+      return null;
     }
 
-    console.log(`\n[Agent] Context size (${stats.tokens} tokens) exceeds 35,000. Compacting memory...`);
+    if (!force) {
+      console.log(`\n[Agent] Context size (${stats.tokens} tokens) exceeds 35,000. Compacting memory...`);
+    }
 
     const systemMessages = this.messages.filter(m => m.role === 'system');
     const nonSystemMessages = this.messages.filter(m => m.role !== 'system');
 
     const encoder = getEncoding("cl100k_base");
-    
+
     let retainedTokens = 0;
     const targetRetainedTokens = 8000;
-    
+
     let retainIndex = nonSystemMessages.length;
     for (let i = nonSystemMessages.length - 1; i >= 0; i--) {
       const m = nonSystemMessages[i];
       let msgTokens = 0;
       if (m.content) msgTokens += encoder.encode(m.content).length;
       if (m.tool_calls) msgTokens += encoder.encode(JSON.stringify(m.tool_calls)).length;
-      
+
       if (retainedTokens + msgTokens > targetRetainedTokens) {
         break;
       }
@@ -373,7 +403,7 @@ GUIDANCE FOR PLAN EXECUTION:
     const messagesToRetain = nonSystemMessages.slice(retainIndex);
 
     if (messagesToSummarize.length === 0) {
-      return;
+      return null;
     }
 
     const summaryPrompt = "Summarize the following conversation history. IDENTIFY THE CURRENT ACTIVE TASK and the state of the implementation. Preserve all key technical decisions, file paths, completed tasks, and context. Do not omit any important technical details, errors, or findings.";
@@ -398,13 +428,18 @@ GUIDANCE FOR PLAN EXECUTION:
         ...messagesToRetain
       ];
 
-      console.log(`[Agent] Memory compacted. New context size: ${this.getContextStats().tokens} tokens.\n`);
+      if (!force) {
+        console.log(`[Agent] Memory compacted. New context size: ${this.getContextStats().tokens} tokens.\n`);
+      }
+      return this.getContextStats().tokens;
     } catch (err: any) {
       if (err.name === 'AbortError' || signal?.aborted) {
         // Aborted, do nothing
-      } else {
+      } else if (!force) {
         console.error(`[Agent] Memory compaction failed: ${err.message}`);
       }
+      if (force) throw err;
+      return null;
     }
   }
 }

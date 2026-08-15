@@ -81,6 +81,12 @@ export interface AgentResponse {
   content: string;
   steps: AgentStep[];
   plan?: string[];
+  /**
+   * True when the final assistant text was already delivered
+   * incrementally through the `run()` `onText` callback — lets the UI
+   * skip re-appending the full blob after the turn ends.
+   */
+  streamedFinal?: boolean;
 }
 
 export interface SessionMetadata {
