@@ -5,6 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 
 import App from '../src/tui/app.js';
 import type { AppProps } from '../src/tui/app.js';
+import { DEFAULT_THEME } from '../src/tui/theme.js';
 
 /**
  * WEB MODE — view/debug the real <App> + all TUI components in a browser via
@@ -135,11 +136,14 @@ const props = {
   sessionId: session.metadata.id,
   session,
   initialMode: 'agent' as const,
+  // render.tsx loads the theme from ~/.tiny-cli/theme.json in terminal mode;
+  // the browser has no fs — use the built-in default.
+  theme: DEFAULT_THEME,
 };
 
 const root = createRoot(document.getElementById('root')!);
 root.render(
-  <InkXterm focus>
+  <InkXterm focus termOptions={{ allowProposedApi: true }}>
     <App {...(props as unknown as AppProps)} />
   </InkXterm>,
 );

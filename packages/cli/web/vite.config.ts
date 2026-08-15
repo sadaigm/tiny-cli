@@ -2,14 +2,47 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import { inkWebPlugin } from 'ink-web/vite';
 import { fileURLToPath } from 'node:url';
+import { isBuiltin } from 'node:module';
 
 const empty = fileURLToPath(new URL('./shims/empty.js', import.meta.url));
+
+// Node builtins that the served code imports. Redirect each to a working
+// browser polyfill (path/os via the *-browserify packages) or, for modules
+// only used by Node-only code paths, the empty stub. Vite's alias table
+// can't reliably catch bare builtin imports from source files, so do it
+// with a resolveId hook instead.
+const builtinShims = {
+  path: 'path-browserify',
+  os: 'os-browserify',
+};
+const nodeBuiltinsToEmpty = {
+  name: 'node-builtins-to-empty',
+  enforce: 'pre',
+  async resolveId(source, importer, options) {
+    let bare = source;
+    if (source.startsWith('node:')) {
+      bare = source.slice(5);
+      if (bare === 'url') return null; // let ink-web/Vite handle it
+    }
+    if (!isBuiltin(bare)) return null;
+    // Resolve polyfills to a real absolute path — returning a bare specifier
+    // here would make Vite serve /@id/<name>, which 404s.
+    if (builtinShims[bare]) {
+      const resolved = await this.resolve(builtinShims[bare], importer, {
+        ...options,
+        skipSelf: true,
+      });
+      return resolved ?? empty;
+    }
+    return empty;
+  },
+};
 
 // Web mode — boots the real <App> inside an xterm.js terminal in the browser.
 // Run with: pnpm --filter tiny-cli web
 export default defineConfig({
   root: import.meta.dirname,
-  plugins: [react(), inkWebPlugin()],
+  plugins: [react(), inkWebPlugin(), nodeBuiltinsToEmpty],
   server: {
     port: 5173,
   },
@@ -20,6 +53,10 @@ export default defineConfig({
       // only run during plan execution (/continue), never during plain UI render.
       'fs/promises': empty,
       'node:fs/promises': empty,
+      // planReader.ts also pulls in the Node 'path' module, which the browser
+      // bundle can't resolve (same situation as fs/promises above).
+      path: empty,
+      'node:path': empty,
       // Stub @tiny-cli/core so its node-fetch chain never enters the browser
       // bundle. Web mode injects a fake agent/session via main.tsx; the only
       // value import from core that <App> needs is SessionManager.createSession.
