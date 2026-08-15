@@ -45,9 +45,13 @@ Phase 7/8 manual E2E items) plus this round's features.
   - [ ] Mouse wheel scrolls (after `/mouse on`); status bar never stretches
 - [ ] **/help and /queue live check** — verify rendering in the log pane and
       `/queue clear` dropping queued messages mid-turn
-- [ ] **Queue display integrity** — the `📬 N queued` strip and `/queue`
+- [x] **Queue display integrity** — the `📬 N queued` strip and `/queue`
       agree with `useAgent`'s queue at all times (they read the same state,
-      but confirm no path bypasses `queueRef` sync)
+      but confirm no path bypasses `queueRef` sync). Audited: enqueue /
+      dequeue / clear / idle-exit / error-exit all sync `queueRef` → state,
+      and the reducer never writes `messageQueue` directly, so there is no
+      bypass path. Known behaviour (not a desync): a failed turn leaves
+      queued messages pending, and `/clear` does not drop them.
 
 ## P1 — high-value next
 
