@@ -10,7 +10,7 @@ A powerful, lightweight agentic AI coding assistant that supports any model via 
 ## 🌟 Key Features
 
 - **🤖 Autonomous Agent Mode**: A sophisticated execution loop that cycles through *Research* → *Plan* → *Act* → *Verify*.
-- **🔌 MCP Client Integration**: Built-in support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Background connections don't block the REPL.
+- **🔌 MCP Client Integration**: Built-in support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Background connections don't block the TUI.
 - **🧠 Smart Context Management**: Automatic memory compaction handles long-running sessions (35k token trigger).
 - **📎 File Mentions (`@filename`)**: Instant context injection with fuzzy-search.
 - **🛡️ Permission-Based Execution**: Secure execution with configurable modes (`notify`, `auto-edit`, `auto`).
@@ -93,7 +93,7 @@ Typing `@` triggers a high-performance workspace indexer.
 `tiny-cli` is a first-class **MCP Host**. It implements the Model Context Protocol to allow for infinite extensibility.
 
 - **Tool Discovery**: Automatically lists and registers tools from connected MCP servers.
-- **Background Connections**: MCP servers connect in the background so the REPL is never blocked during startup. Connection status is logged after each prompt.
+- **Background Connections**: MCP servers connect in the background so the TUI is never blocked during startup. Connection status is logged after each prompt.
 - **Transport Support**: Supports both `stdio` (local processes) and `http` (remote HTTP/SSE) transports.
 
 To manage servers, use the `/mcp` command to list, connect, or disconnect servers in real-time.
@@ -142,11 +142,11 @@ docker run -it tiny-cli
 
 ## 📖 Usage
 
-### Interactive REPL
+### Interactive TUI
 
 ```bash
-tiny-cli                           # Start interactive REPL (default: agent mode)
-tiny-cli --mode plan               # Start REPL in plan mode
+tiny-cli                           # Start interactive TUI (default: agent mode)
+tiny-cli --mode plan               # Start TUI in plan mode
 ```
 
 ### Headless (Single Query)
@@ -155,6 +155,16 @@ tiny-cli --mode plan               # Start REPL in plan mode
 tiny-cli "build a web app"                    # Run a single task and exit
 tiny-cli -q "draft an architecture" -m plan   # Headless plan mode
 tiny-cli --resume <session-id>                # Resume a previous session
+```
+
+### TUI Web Preview (development)
+
+The real TUI renders in a browser tab via xterm.js — handy for iterating
+on layout and interactions without a model endpoint. A fake agent feeds
+the UI, so everything is interactive but makes no network calls.
+
+```bash
+pnpm --filter tiny-cli web        # → http://localhost:5173
 ```
 
 ---
@@ -227,7 +237,7 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
 ## 🏗 Project Structure
 
 - `packages/core`: Core agent engine, model client, tool registry, MCP manager, and logger.
-- `packages/cli`: Interactive REPL, command handlers, and file mention system.
+- `packages/cli`: Interactive TUI, command handlers, and file mention system.
 
 ## 📄 License
 
