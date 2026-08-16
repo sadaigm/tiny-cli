@@ -43,7 +43,9 @@ export const DEFAULT_BINDINGS: Record<BindableAction, string> = {
   yank: 'y',
 };
 
+/** Project-first (like agents.json): `<cwd>/.tiny-cli/keys.json` wins over the home copy. */
 const KEYS_FILE = path.join(os.homedir(), '.tiny-cli', 'keys.json');
+const PROJECT_KEYS_FILE = path.join(process.cwd(), '.tiny-cli', 'keys.json');
 
 /** Named keys Ink reports on the `key` object. */
 const NAMED_KEYS = new Set([
@@ -51,6 +53,22 @@ const NAMED_KEYS = new Set([
   'up', 'down', 'left', 'right', 'home', 'end',
   'pageup', 'pagedown', 'space',
 ]);
+
+/**
+ * Read the first file that exists among `candidates`, or null when none
+ * do. Used for project-first config lookup (project `.tiny-cli/` beats
+ * the home copy).
+ */
+export function readFirstExisting(...candidates: string[]): string | null {
+  for (const file of candidates) {
+    try {
+      return fs.readFileSync(file, 'utf-8');
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+}
 
 /**
  * Parse a binding string into a descriptor, or null when malformed.
@@ -86,8 +104,9 @@ export function loadKeybindings(): Keybindings {
   for (const action of Object.keys(DEFAULT_BINDINGS) as BindableAction[]) {
     result.bindings[action] = parseBinding(DEFAULT_BINDINGS[action]);
   }
+  const raw = readFirstExisting(PROJECT_KEYS_FILE, KEYS_FILE);
+  if (!raw) return result;
   try {
-    const raw = fs.readFileSync(KEYS_FILE, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<Record<BindableAction, unknown>>;
     for (const action of Object.keys(DEFAULT_BINDINGS) as BindableAction[]) {
       const value = parsed[action];

@@ -890,12 +890,18 @@ export default function App({
 
   return (
     <Box flexDirection="column" height={terminalRows}>
-      {/* TOP: conversation pane — fixed height, scrollable, collapsible */}
+      {/* TOP: conversation pane — fixed height, scrollable, collapsible.
+          Border stays themed and quiet; only alarms (pending modal,
+          error) override it. */}
       <Box
         flexDirection="column"
         height={topBoxHeight}
         borderStyle="round"
-        borderColor={theme.border}
+        borderColor={
+          state.pendingApproval || state.pendingRecovery ? theme.warning
+          : state.agentState === 'error' ? theme.error
+          : theme.border
+        }
       >
         <MessageLog
           ref={paneRef}
@@ -944,8 +950,15 @@ export default function App({
         />
       </Box>
 
-      {/* BOTTOM: agent details (banner + Model/Session + status) — fixed height */}
-      <Box flexDirection="column" height={bottomBoxHeight} borderStyle="single" borderColor="gray">
+      {/* BOTTOM: agent details (banner + Model/Session + status) — fixed height.
+          Border colour comes straight from the theme (borderStatus), so each
+          sample theme gives this panel a distinct look. */}
+      <Box
+        flexDirection="column"
+        height={bottomBoxHeight}
+        borderStyle="single"
+        borderColor={theme.borderStatus}
+      >
         <Header model={config_.model} endpoint={config_.endpoint} sessionId={sessionId_} />
         <StatusBar
           mode={state.mode}

@@ -521,17 +521,17 @@ function InputBox({
       {searchActive ? (
         /* Reverse-i-search prompt replaces the input line while active. */
         <Box>
-          <Text color="cyan" bold>
+          <Text color={getTheme().statusText} bold>
             (r-search)
           </Text>{' '}
           <Text dimColor>`</Text>
-          <Text color="cyan">{searchQuery}</Text>
+          <Text color={getTheme().statusText}>{searchQuery}</Text>
           <Text dimColor>`</Text>{' '}
           <Text dimColor>: </Text>
           {searchResult ? (
             <Text>
               <Text dimColor>({searchResult.matchNumber}/{searchResult.matchCount}) </Text>
-              <Text color="green">{searchResult.entry}</Text>
+              <Text color={getTheme().user}>{searchResult.entry}</Text>
             </Text>
           ) : (
             <Text dimColor italic>

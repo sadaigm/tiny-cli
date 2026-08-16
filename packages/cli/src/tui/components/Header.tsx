@@ -1,6 +1,8 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 
+import { getTheme } from '../theme.js';
+
 /**
  * Props for the {@link Header} component.
  */
@@ -31,20 +33,21 @@ export interface HeaderProps {
  * ```
  */
 function Header({ model, endpoint, sessionId, version }: HeaderProps): React.ReactElement {
+  const theme = getTheme();
   return (
     <Box flexDirection="column">
       <Box>
-        <Text bold color="cyan">
+        <Text bold color={theme.statusText}>
           🚀 tiny-cli{version ? ` v${version}` : ''}
         </Text>
-        <Text dimColor>
+        <Text color={theme.system}>
           {'  ·  '}
-          <Text bold>{model}</Text> @ {endpoint}
+          <Text bold color={theme.statusText}>{model}</Text> @ {endpoint}
         </Text>
       </Box>
       <Box>
-        <Text dimColor>
-          Session: <Text bold>{sessionId}</Text>
+        <Text color={theme.system}>
+          Session: <Text bold color={theme.statusText}>{sessionId}</Text>
         </Text>
       </Box>
     </Box>

@@ -1,0 +1,7 @@
+{
+  "browse": "ctrl+p",
+  "historySearch": "ctrl+r",
+  "sessionSwitcher": "ctrl+s",
+  "abort": "escape",
+  "yank": "y"
+}

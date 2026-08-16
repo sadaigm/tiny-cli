@@ -86,22 +86,23 @@ function StatusBar({ mode, contextStats, permissionMode }: StatusBarProps): Reac
   // agent.getContextStats), not a chars/4 estimate — the meter is the real
   // budget the auto-compaction threshold acts on.
   const meter = usageMeter(contextStats.tokens);
+  const theme = getTheme();
   return (
     // Left-packed single row — no space-between, so no full-width stretching gap.
     <Box>
-      <Text color={getTheme().accent} bold>
+      <Text color={theme.accent} bold>
         [{mode}]
       </Text>
       <Text>  </Text>
-      <Text dimColor>
+      <Text color={theme.system}>
         🧠 {formatTokens(contextStats.tokens)} tok{' '}
       </Text>
       <Text color={meter.color}>
         {meter.bar} {meter.percent}%
       </Text>
-      <Text dimColor> ({formatBytes(contextStats.characters)})</Text>
+      <Text color={theme.system}> ({formatBytes(contextStats.characters)})</Text>
       <Text>  </Text>
-      <Text dimColor>🔒 {PERMISSION_LABELS[permissionMode]}</Text>
+      <Text color={theme.system}>🔒 {PERMISSION_LABELS[permissionMode]}</Text>
     </Box>
   );
 }

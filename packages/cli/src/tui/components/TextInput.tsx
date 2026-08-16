@@ -3,6 +3,7 @@ import { Text, useInput } from 'ink';
 import { chipAt } from '../utils/pasteChip.js';
 import { verticalMoveOffset } from '../utils/lineMotion.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
+import { getTheme } from '../theme.js';
 
 /**
  * Props for the custom {@link TextInput}.
@@ -178,7 +179,7 @@ export default function TextInput({
   }, [focus]);
 
   return (
-    <Text>
+    <Text color={value.length > 0 ? getTheme().user : getTheme().system}>
       {value.length > 0
         ? renderValueWithCursor(value, cursorOffset, showCursor && focus)
         : showCursor && focus

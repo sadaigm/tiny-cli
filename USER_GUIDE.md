@@ -12,6 +12,9 @@ This guide provides comprehensive, hands-on instructions for using `tiny-cli` �
 - [Headless / Single-Query Mode](#headless--single-query-mode)
 - [Execution Modes](#execution-modes)
 - [Slash Commands](#slash-commands)
+- [TUI Shortcuts](#tui-shortcuts) — history search, browse mode, yank, `/find`
+- [Custom Keybindings](#custom-keybindings)
+- [Themes](#themes)
 - [File Mentions (`@`)](#file-mentions-)
 - [Permission Modes](#permission-modes)
 - [Tools](#tools)
@@ -132,6 +135,8 @@ Type `/` in the REPL to bring up the command menu. Use **arrow keys** to navigat
 | `/mode` | Switch permission mode (`notify`, `auto-edit`, `auto`) |
 | `/continue` | Continue executing the active plan |
 | `/queue` | Show messages queued while the agent works (`/queue clear` drops them) |
+| `/find <text>` | Search the conversation log; jumps browse-mode focus to the newest match |
+| `/compact` | Force a context compaction now; reports before → after tokens |
 | `/clear` | Clear conversation history |
 | `/help` | List all commands and keyboard shortcuts |
 | `/mouse` | Toggle mouse-wheel scrolling of the conversation pane |
@@ -152,6 +157,96 @@ Commands that have sub-options (e.g., `/model`, `/session`, `/tools`) transition
 | `Ctrl+D` | Exit immediately |
 
 While the agent is working, anything you type and submit is **queued** and processed in order after the current turn — the input never freezes. Use `/queue` to inspect the queue.
+
+### TUI Shortcuts
+
+| Key | Action |
+|:---|:---|
+| `Ctrl+R` | Incremental history search (like a shell's reverse-i-search). Type to filter, `↑/↓` step through matches, `Enter` loads the match into the input for editing, `Esc` cancels |
+| `Ctrl+S` | Open the session switcher from anywhere |
+| `↑` / `↓` | Inside a **multi-line draft**: move the cursor by visual line (column preserved). On a single line: recall history |
+
+#### Browse mode extras (`Ctrl+P` first)
+
+1. Press `Ctrl+P` to enter browse mode.
+2. Use `↑/↓` or the mouse wheel (enable with `/mouse on`) to scroll the log.
+3. Press `y` to **yank** the focused entry's raw content (message text, tool args, or result) to your local clipboard via OSC 52 — works over SSH and tmux with no clipboard tool installed.
+4. Press `Tab` to expand/collapse a collapsed tool summary.
+5. Press `Esc` to return to typing.
+
+#### Finding messages
+
+- Type `/find <text>` to list all matches (newest first) and jump browse-mode focus to the most recent hit.
+
+### Custom Keybindings
+
+Remap the TUI shortcuts by creating a `keys.json` — either **project-local** (`.tiny-cli/keys.json` in the repo root, takes priority) or **global** (`~/.tiny-cli/keys.json`). A ready-to-copy template is at [`samples/keys.sample.json`](samples/keys.sample.json). Use `"ctrl+<letter>"` (e.g. `"ctrl+b"`) or a named key. Invalid entries fall back to the defaults.
+
+```json
+{
+  "browse": "ctrl+p",
+  "historySearch": "ctrl+r",
+  "sessionSwitcher": "ctrl+s",
+  "abort": "escape",
+  "yank": "y"
+}
+```
+
+### Themes
+
+Override the colours by creating a `theme.json` — either **project-local** (`.tiny-cli/theme.json` in the repo root, takes priority, same convention as `agents.json`) or **global** (`~/.tiny-cli/theme.json`). Each key is a semantic role; any role you omit keeps its default. Invalid values are ignored.
+
+Colour values may be **named ANSI colours** (`green`, `cyanBright`, …) or **hex strings** (`#eb5e28`, `#0077b6`) — hex gives you exact palette colours on true-colour terminals.
+
+Ready-to-copy theme varieties are in [`samples/`](samples/) — pick one, copy it, and restart:
+
+```bash
+cp samples/theme-ocean-blue.sample.json ~/.tiny-cli/theme.json   # Ocean Blue Serenity — deep blues, turquoise highlights
+cp samples/theme-cozy-neutral.sample.json ~/.tiny-cli/theme.json # Cozy Neutral Retreat — bronze, sand, sage
+cp samples/theme-rustic-charm.sample.json ~/.tiny-cli/theme.json # Rustic Charm — charcoal/linen with paprika accents
+```
+
+The full default palette is in [`samples/theme.sample.json`](samples/theme.sample.json):
+
+```json
+{
+  "user": "green",
+  "assistant": "blue",
+  "toolCall": "cyan",
+  "toolResult": "gray",
+  "system": "gray",
+  "error": "red",
+  "border": "cyan",
+  "borderStatus": "cyan",
+  "statusText": "cyan",
+  "accent": "magenta",
+  "warning": "yellow"
+}
+```
+
+Role reference:
+
+| Role | Controls |
+|:---|:---|
+| `user` | Your messages, the input prompt chevron, typed text |
+| `assistant` | Assistant messages |
+| `toolCall` / `toolResult` | Tool-call / tool-result summaries |
+| `system` | System info lines, placeholder, status-bar labels |
+| `error` | Error text (also the conversation border on failure) |
+| `border` | Conversation pane border |
+| `borderStatus` | Bottom status-panel border |
+| `statusText` | `tiny-cli` banner, model/session values, history-search prompt |
+| `accent` | `[mode]` badge, mode highlights |
+| `warning` | Approval modal border, queue notices (also the border while a modal is open) |
+
+### Other TUI niceties
+
+- **Streaming output** — assistant replies stream token-by-token as they're generated.
+- **Context meter** — the status bar shows a live token-usage bar with a colour ramp (green → yellow → red) relative to the auto-compact threshold.
+- **Notification bell** — if a turn takes 10 seconds or more, the terminal emits a bell when it finishes, so a backgrounded tab pings you.
+- **`/compact`** — force a context compaction on demand; the TUI reports the before → after token counts and saves the session.
+- **Links** — URLs and absolute paths in messages are underlined.
+- **Persisted history** — your input history survives restarts, stored per project (`~/.config/tiny-cli/input-history.json`).
 
 ---
 

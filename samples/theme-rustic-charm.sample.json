@@ -1,0 +1,13 @@
+{
+  "user": "#eb5e28",
+  "assistant": "#fffcf2",
+  "toolCall": "#ccc5b9",
+  "toolResult": "#8d8a85",
+  "system": "#6c6a66",
+  "error": "#c1121f",
+  "border": "#403d39",
+  "borderStatus": "#eb5e28",
+  "statusText": "#ccc5b9",
+  "accent": "#eb5e28",
+  "warning": "#f4a261"
+}

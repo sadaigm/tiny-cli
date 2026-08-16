@@ -18,6 +18,8 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+import { readFirstExisting } from './keybindings.js';
+
 /** Semantic colour roles used across the TUI. */
 export interface Theme {
   /** User-submitted messages and the input prompt chevron. */
@@ -34,6 +36,10 @@ export interface Theme {
   error: string;
   /** Conversation pane border. */
   border: string;
+  /** Bottom status panel border — the mode-tinted instrument frame. */
+  borderStatus: string;
+  /** Bottom banner/status text (tiny-cli title, mode badge). */
+  statusText: string;
   /** Mode badges, highlights, the agent-details accent. */
   accent: string;
   /** Warning highlights (approval modal border, queue notices). */
@@ -49,11 +55,15 @@ export const DEFAULT_THEME: Theme = {
   system: 'gray',
   error: 'red',
   border: 'cyan',
+  borderStatus: 'cyan',
+  statusText: 'cyan',
   accent: 'magenta',
   warning: 'yellow',
 };
 
 const THEME_FILE = path.join(os.homedir(), '.tiny-cli', 'theme.json');
+/** Project-first (like agents.json): `<cwd>/.tiny-cli/theme.json` wins over the home copy. */
+const PROJECT_THEME_FILE = path.join(process.cwd(), '.tiny-cli', 'theme.json');
 
 /**
  * The active theme — set once by {@link setTheme} at startup (render.tsx),
@@ -81,6 +91,17 @@ const VALID_COLORS = new Set([
 ]);
 
 /**
+ * A colour spec is valid when it's a named ANSI colour or a hex string
+ * (`#rgb` / `#rrggbb`) — Ink's `color` prop accepts both, so themes can
+ * use exact palette values (e.g. "#eb5e28") instead of the coarse
+ * 16-colour approximations.
+ */
+function isValidColor(value: string): boolean {
+  if (VALID_COLORS.has(value)) return true;
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value);
+}
+
+/**
  * Load the theme from `~/.tiny-cli/theme.json`.
  *
  * Reads synchronously at startup (before the first render — an async theme
@@ -88,13 +109,14 @@ const VALID_COLORS = new Set([
  * default theme.
  */
 export function loadTheme(): Theme {
+  const raw = readFirstExisting(PROJECT_THEME_FILE, THEME_FILE);
+  if (raw === null) return { ...DEFAULT_THEME };
   try {
-    const raw = fs.readFileSync(THEME_FILE, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<Record<keyof Theme, unknown>>;
     const theme: Theme = { ...DEFAULT_THEME };
     for (const key of Object.keys(DEFAULT_THEME) as (keyof Theme)[]) {
       const value = parsed[key];
-      if (typeof value === 'string' && VALID_COLORS.has(value)) {
+      if (typeof value === 'string' && isValidColor(value)) {
         theme[key] = value;
       }
     }
