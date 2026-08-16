@@ -1,18 +1,44 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
+import * as fs from 'fs';
 import { readFile, writeFile, readdir, mkdir } from 'fs/promises';
 import path from 'path';
 import { ToolDefinition } from '../types.js';
 import { ToolRegistry } from './registry.js';
 
+/**
+ * fs.promises.glob (Node >=22) is present at runtime but absent from
+ * @types/node@20. It returns an async iterable of matched paths (not an
+ * array). Bind it through the fs namespace with a minimal typed signature
+ * and a collector, so the glob tool uses native globbing (no shell, real
+ * `**` recursion) without a dependency bump. */
+const fsGlob = (
+  (fs as unknown as { promises: { glob: (pattern: string, opts?: { cwd?: string }) => AsyncIterable<string> } }).promises.glob
+);
+async function collectGlob(pattern: string, cwd: string): Promise<string[]> {
+  const out: string[] = [];
+  for await (const entry of fsGlob(pattern, { cwd })) out.push(entry);
+  return out;
+}
+
 export function registerDefaultTools(registry: ToolRegistry) {
   // bash
   const bashDef: ToolDefinition = {
     name: 'bash',
-    description: 'Execute a shell command in your environment.',
+    description: [
+      'Execute a shell command in your environment (runs through /bin/sh).',
+      '',
+      'How to use:',
+      '1. Provide a single `cmd` string. It may chain multiple commands with && ; and pipes |.',
+      '2. The FULL combined stdout+stderr of every segment is returned, even if a segment exits non-zero.',
+      '3. Non-zero exit is NOT treated as a tool failure — read the output to judge success.',
+      '',
+      'Notes: prefer dedicated tools where they fit (read a file -> `read`, find by name -> `glob`,',
+      'search contents -> `grep`). This is a mutating tool (guarded by the permission system).',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
-        cmd: { type: 'string', description: 'The command to execute' }
+        cmd: { type: 'string', description: 'The shell command(s) to execute; may chain with && ; |' }
       },
       required: ['cmd']
     },
@@ -24,11 +50,20 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return 'Tool error: cmd must be a shell command string.';
     }
     return new Promise((resolve) => {
-      exec(command as string, (err, stdout, stderr) => {
-        if (err) {
-          resolve(`Error: ${err.message}\n${stderr}`);
+      // A non-zero exit is data, not a tool failure: chains like
+      // `cd X && ls missing-file` should surface BOTH the successful echo
+      // output AND the ls stderr, so the model can read the whole picture
+      // instead of bailing on the first failing segment. Only treat a total
+      // inability to run (nothing on stdout/stderr, e.g. command not found)
+      // as a genuine error. stdout and stderr are merged like a real shell.
+      exec(command as string, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
+        if (combined) {
+          resolve(combined);
+        } else if (err) {
+          resolve(`Error: ${err.message}`);
         } else {
-          resolve(stdout || stderr || 'Command executed successfully (no output).');
+          resolve('Command executed successfully (no output).');
         }
       });
     });
@@ -200,12 +235,23 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // grep
   const grepDef: ToolDefinition = {
     name: 'grep',
-    description: 'Searches for patterns in file contents.',
+    description: [
+      'Searches file CONTENTS for a pattern, recursively across a directory (or in a single file).',
+      'Use this to find WHERE a symbol/string/function is used or defined.',
+      '',
+      'How to use:',
+      '1. Provide a `pattern` (extended/POSIX ERE regular expression: supports | alternation, .* + ?, and char classes like [A-Z]).',
+      '2. Provide a `path` to a file or directory (relative to the project root, e.g. "packages/core/src").',
+      '3. Returns "file:line:matched-line" for each hit, or "No matches found." if none.',
+      '',
+      'Notes: searches source files only (*.ts/*.tsx/*.js/*.jsx/*.json/*.md).',
+      'Finding a file by NAME/location -> use `glob`. Reading a file -> use `read`.',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
-        pattern: { type: 'string', description: 'The pattern to search for' },
-        path: { type: 'string', description: 'The file or directory to search in' }
+        pattern: { type: 'string', description: 'Extended regex (ERE) to match against file contents, e.g. "handleModelCommand|fetchModels"' },
+        path: { type: 'string', description: 'The file or directory to search in, relative to the project root (e.g. "packages/core/src")' }
       },
       required: ['pattern', 'path']
     }
@@ -214,13 +260,22 @@ export function registerDefaultTools(registry: ToolRegistry) {
     if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
     const fullPath = path.resolve(process.cwd(), args.path);
+    // -E: extended regex (the model emits alternation '|', which is only valid
+    // in ERE; in BRE it is treated as a literal and often errors). --include
+    // keeps us out of node_modules/dist noise. We pass args via execFile-style
+    // array to avoid shell-quoting bugs in the pattern/path.
     return new Promise((resolve) => {
-      exec(`grep -rIn "${args.pattern}" "${fullPath}"`, (err, stdout, stderr) => {
-        if (err && !stdout) {
-          resolve(`No matches found or Error: ${err.message}`);
-        } else {
-          resolve(stdout || 'No matches found.');
+      const child = execFile('grep', ['-rInE', '--include=*.{ts,tsx,js,jsx,json,md}', args.pattern, fullPath], (err, stdout, stderr) => {
+        // grep exits 1 when there are NO matches — that is success, not an error.
+        if (err && (err as any).code === 1 && !stderr) {
+          resolve('No matches found.');
+          return;
         }
+        if (err) {
+          resolve(`Error: ${stderr || (err as Error).message}`);
+          return;
+        }
+        resolve(stdout || 'No matches found.');
       });
     });
   });
@@ -228,26 +283,38 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // glob
   const globDef: ToolDefinition = {
     name: 'glob',
-    description: 'Finds files based on pattern matching.',
+    description: [
+      'Finds files by NAME/path using glob patterns (NOT by content — use `grep` for content).',
+      'Use this to LOCATE files: e.g. all test files, a config, or a component by name.',
+      '',
+      'How to use:',
+      '1. Provide a `pattern`. Supports `*` (one segment), `**` (any depth), and `?`.',
+      '2. Patterns are relative to the project root.',
+      '3. Returns one matched path per line, or "No files found." if none.',
+      '',
+      'Examples: "packages/**/*.test.ts" (all tests), "**/*.config.js", "src/components/*.tsx".',
+    ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
-        pattern: { type: 'string', description: 'The glob pattern (e.g. src/**/*.ts)' }
+        pattern: { type: 'string', description: 'Glob pattern relative to project root, e.g. "packages/**/*.test.ts"' }
       },
       required: ['pattern']
     }
   };
   registry.register(globDef, async (args) => {
     if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
-    return new Promise((resolve) => {
-      exec(`bash -c "ls -1 ${args.pattern}"`, (err, stdout, stderr) => {
-        if (err && !stdout) {
-          resolve(`No files found or Error: ${err.message}`);
-        } else {
-          resolve(stdout || 'No files found.');
-        }
-      });
-    });
+    try {
+      // Native globbing (Node >=22 fs.glob): no shell, so the pattern can never
+      // inject commands, and `**` recurses properly. The old `ls -1 ${pattern}`
+      // only expanded against the cwd and silently dropped `**`.
+      // fs.glob is present at runtime but absent from @types/node@20, so bind
+      // it through the fs namespace with a minimal typed shim.
+      const matches = await collectGlob(args.pattern, process.cwd());
+      return matches.length ? matches.join('\n') : 'No files found.';
+    } catch (err) {
+      return `Error: ${(err as Error).message}`;
+    }
   });
 
   // plan_write

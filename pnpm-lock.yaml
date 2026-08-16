@@ -119,7 +119,7 @@ importers:
         version: 3.25.1(zod@3.25.76)
     devDependencies:
       '@types/jest':
-        specifier: ^29.5.12
+        specifier: ^29
         version: 29.5.14
       '@types/minimatch':
         specifier: ^6.0.0
