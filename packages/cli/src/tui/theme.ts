@@ -26,6 +26,8 @@ export interface Theme {
   user: string;
   /** Assistant messages. */
   assistant: string;
+  /** Assistant reasoning / thinking text (rendered dimmed). */
+  reasoning: string;
   /** Tool-call summaries. */
   toolCall: string;
   /** Tool-result summaries. */
@@ -50,6 +52,7 @@ export interface Theme {
 export const DEFAULT_THEME: Theme = {
   user: 'green',
   assistant: 'blue',
+  reasoning: 'gray',
   toolCall: 'cyan',
   toolResult: 'gray',
   system: 'gray',

@@ -29,12 +29,23 @@ export interface MessageItemProps {
   expanded?: boolean;
   /** Terminal width in columns, for header truncation and soft-wrapping. */
   columns?: number;
+  /** True while an agent turn is streaming — reasoning renders unclipped. */
+  agentRunning?: boolean;
+  /**
+   * Line scroll within this entry's body (when expanded taller than the
+   * pane): skip this many wrapped body lines. Ignored unless `maxLines`
+   * is also given.
+   */
+  lineOffset?: number;
+  /** Cap on rendered body lines — the pane's viewport budget for this entry. */
+  maxLines?: number;
 }
 
 /** Icon prefix for each log entry type. */
 const ICONS: Record<LogEntryType, string> = {
   user: '❯',
   assistant: '🤖',
+  reasoning: '💭',
   tool_call: '🔧',
   tool_result: '↳',
   system: 'ℹ',
@@ -48,6 +59,7 @@ function entryColors(): Record<LogEntryType, string> {
   return {
     user: theme.user,
     assistant: theme.assistant,
+    reasoning: theme.reasoning,
     tool_call: theme.toolCall,
     tool_result: theme.toolResult,
     system: theme.system,
@@ -88,6 +100,7 @@ function renderToolSummary(
   expanded: boolean,
   focused: boolean,
   columns: number,
+  clip?: (text: string) => string,
 ): React.ReactElement {
   const marker = focused ? '▸ ' : '  ';
   const hint = !expanded && summary.hiddenLineCount > 1 ? `  ⤤ +${summary.hiddenLineCount} lines` : '';
@@ -107,7 +120,7 @@ function renderToolSummary(
       </Box>
       {expanded && summary.detail ? (
         <Box marginLeft={3}>
-          <Text dimColor>{wrapIndent(summary.detail, 0, columns - 3)}</Text>
+          <Text dimColor>{clip ? clip(wrapIndent(summary.detail, 0, columns - 3)) : wrapIndent(summary.detail, 0, columns - 3)}</Text>
         </Box>
       ) : null}
     </Box>
@@ -166,21 +179,60 @@ export default function MessageItem({
   focused = false,
   expanded = false,
   columns = 80,
+  agentRunning = false,
+  lineOffset = 0,
+  maxLines,
 }: MessageItemProps): React.ReactElement {
   const color = entryColors()[entry.type];
   const timing = formatTiming(entry.timing);
   const marker = focused ? '▸ ' : '  ';
 
+  // Viewport clip: when the pane scrolls inside this entry (lineOffset) or
+  // budgets its lines (maxLines), the rendered body is windowed to those
+  // lines. Applies to every expanded body shape below.
+  const clip = (text: string): string => {
+    if (maxLines === undefined) return text;
+    const lines = text.split('\n');
+    return lines.slice(lineOffset, lineOffset + maxLines).join('\n');
+  };
+
   // --- Tool call: smart summary, one-line when collapsed ---
   if (entry.type === 'tool_call') {
     const summary = summarizeToolCall(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_call, color, timing, expanded, focused, columns);
+    return renderToolSummary(summary, ICONS.tool_call, color, timing, expanded, focused, columns, clip);
   }
 
   // --- Tool result: first line when collapsed, full when expanded ---
   if (entry.type === 'tool_result') {
     const summary = summarizeToolResult(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_result, color, timing, expanded, focused, columns);
+    return renderToolSummary(summary, ICONS.tool_result, color, timing, expanded, focused, columns, clip);
+  }
+
+  // --- Reasoning: streams in full while its entry is live (thinking
+  // phase); collapses to a one-line section (Tab to expand) as soon as the
+  // turn moves on to text or tool calls ---
+  if (entry.type === 'reasoning') {
+    const fullBody = wrapIndent(entry.content, 3, columns);
+    const fullLines = fullBody.split('\n');
+    const showFull = entry.live || expanded;
+    const body = showFull
+      ? clip(fullBody)
+      : fullLines.slice(0, 1).join('\n');
+    const hiddenHint = showFull || fullLines.length <= 1 ? '' : `  ⤤ +${fullLines.length - 1} lines`;
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text color={color}>
+            {marker}
+            {ICONS[entry.type]} Thinking:{expanded ? '  ⤤ collapse' : ''}
+          </Text>
+          {hiddenHint ? <Text dimColor>{hiddenHint}</Text> : null}
+        </Box>
+        <Box marginLeft={3}>
+          {renderBodyWithLinks(body, 'gray')}
+        </Box>
+      </Box>
+    );
   }
 
   // --- Standard entries: header + soft-wrapped, indented body ---
@@ -192,7 +244,7 @@ export default function MessageItem({
   // flicker. The full text is shown only when expanded.
   const fullBody = wrapIndent(entry.content, 3, columns);
   const fullLines = fullBody.split('\n');
-  let body = fullBody;
+  let body = clip(fullBody);
   let hiddenHint = '';
   if (!expanded && fullLines.length > MAX_STANDARD_BODY_LINES) {
     body = fullLines.slice(0, MAX_STANDARD_BODY_LINES).join('\n');

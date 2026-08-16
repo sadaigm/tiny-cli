@@ -13,7 +13,7 @@ export class ModelClient {
   private timeoutMs: number;
 
   constructor(private config: AgentConfig) {
-    this.timeoutMs = config.requestTimeoutMs ?? 120_000;
+    this.timeoutMs = config.requestTimeoutMs ?? 3600_000;
     if (config.insecure && config.endpoint.startsWith('https:')) {
       this.agent = new https.Agent({
         rejectUnauthorized: false
@@ -33,6 +33,7 @@ export class ModelClient {
     tools?: ToolDefinition[],
     signal?: AbortSignal,
     onText?: (delta: string) => void,
+    onReasoning?: (delta: string) => void,
   ): Promise<ModelResponse> {
     // Streaming mode: when the caller wants incremental text, consume the
     // SSE endpoint and reassemble both content and tool-call fragments
@@ -41,7 +42,7 @@ export class ModelClient {
     // `onText` can only add liveness, never break a turn.
     if (onText) {
       try {
-        return await this.chatStreamed(messages, tools, signal, onText);
+        return await this.chatStreamed(messages, tools, signal, onText, onReasoning);
       } catch (err: any) {
         if (err.name === 'AbortError' || signal?.aborted) throw err;
         logTrace(`chat() — stream failed (${err.message}), falling back to buffered`);
@@ -109,6 +110,7 @@ export class ModelClient {
     tools: ToolDefinition[] | undefined,
     signal: AbortSignal | undefined,
     onText: (delta: string) => void,
+    onReasoning?: (delta: string) => void,
   ): Promise<ModelResponse> {
     const payload: any = {
       model: this.config.model,
@@ -120,6 +122,8 @@ export class ModelClient {
       payload.tools = tools.map((t) => ({ type: 'function', function: t }));
     }
 
+    const callStart = Date.now();
+    logTrace(`chatStreamed() — POST ${this.config.endpoint}/chat/completions, model=${this.config.model}, messages=${messages.length}, tools=${payload.tools?.length ?? 0}, timeoutMs=${this.timeoutMs}`);
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -129,11 +133,16 @@ export class ModelClient {
       body: JSON.stringify(payload),
       agent: this.agent,
       signal: this.combinedSignal(signal),
+    }).catch((err: any) => {
+      logTrace(`chatStreamed() — fetch FAILED after ${Date.now() - callStart}ms: ${err.name}: ${err.message}`);
+      throw err;
     });
 
     if (!response.ok || !response.body) {
+      logTrace(`chatStreamed() — HTTP ${response.status} after ${Date.now() - callStart}ms`);
       throw new Error(`Model stream error: ${response.statusText}`);
     }
+    logTrace(`chatStreamed() — stream open after ${Date.now() - callStart}ms, consuming deltas…`);
 
     // Tool-call fragments keyed by their stream index: name + argument
     // chunks concatenated until the stream ends.
@@ -161,6 +170,10 @@ export class ModelClient {
           content += piece;
           onText(piece);
         }
+        // Reasoning deltas (Ollama emits `reasoning`, DeepSeek/vLLM emit
+        // `reasoning_content`) — forwarded live, not part of the response.
+        const thought = choice.delta?.reasoning ?? choice.delta?.reasoning_content;
+        if (thought && onReasoning) onReasoning(thought);
         const tc = choice.delta?.tool_calls?.[0];
         if (tc) {
           let slot = toolCalls.find((s) => s.index === (tc.index ?? 0));
@@ -174,6 +187,8 @@ export class ModelClient {
         }
       }
     }
+
+    logTrace(`chatStreamed() — done in ${Date.now() - callStart}ms, content=${content.length} chars, tool_calls=${toolCalls.length}`);
 
     return {
       content,

@@ -38,6 +38,19 @@ const HELP_KEY_LINES: string[] = [
   '/mouse on    enable mouse-wheel scrolling',
 ];
 
+/** Compact relative time like "2d ago" / "3h ago" / "just now". */
+function relativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return '';
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function createInitialState(
   config: AgentConfig,
   sessionId: string,
@@ -89,6 +102,7 @@ type Action =
   | { type: 'SET_PERMISSION_MODE'; mode: 'notify' | 'auto-edit' | 'auto' }
   | { type: 'SET_CONFIG'; config: AgentConfig }
   | { type: 'SET_SESSION_ID'; sessionId: string }
+  | { type: 'SET_LOG_LIVE'; id: string; live: boolean }
   | { type: 'OPEN_SELECTOR'; selector: PendingSelector }
   | { type: 'CLOSE_SELECTOR' }
   | { type: 'MOVE_SELECTOR'; direction: 'up' | 'down' };
@@ -111,6 +125,7 @@ function reducer(state: TuiState, action: Action): TuiState {
         toolResult: action.entry.toolResult,
         timing: action.entry.timing,
         queued: action.entry.queued,
+        live: action.entry.live,
       };
       return { ...state, log: [...state.log, entry] };
     }
@@ -123,6 +138,14 @@ function reducer(state: TuiState, action: Action): TuiState {
       if (idx === -1) return state;
       const log = [...state.log];
       log[idx] = { ...log[idx], content: log[idx].content + action.delta };
+      return { ...state, log };
+    }
+
+    case 'SET_LOG_LIVE': {
+      const idx = state.log.findIndex((e) => e.id === action.id);
+      if (idx === -1 || state.log[idx].live === action.live) return state;
+      const log = [...state.log];
+      log[idx] = { ...log[idx], live: action.live };
       return { ...state, log };
     }
 
@@ -263,6 +286,10 @@ export default function App({
 
   const reserveLogId = useCallback((): string => `log-${++logIdCounter}`, []);
 
+  const setLogLive = useCallback((id: string, live: boolean) => {
+    dispatch({ type: 'SET_LOG_LIVE', id, live });
+  }, []);
+
   const addSystemLog = useCallback((content: string) => {
     dispatch({ type: 'ADD_LOG', entry: { type: 'system', content } });
   }, []);
@@ -285,6 +312,7 @@ export default function App({
     addLog,
     appendLogText,
     reserveLogId,
+    setLogLive,
     getMode: () => stateRef.current.mode,
   });
 
@@ -458,6 +486,11 @@ export default function App({
               dispatch({ type: 'SET_SESSION_ID', sessionId: id });
               dispatch({ type: 'CLEAR_LOG' });
               addSystemLog(`Loaded session: ${id}`);
+              for (const m of newSession.messages) {
+                if (m.role === 'user' || m.role === 'assistant') {
+                  addLog({ type: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) });
+                }
+              }
             } else {
               addErrorLog(`Session not found: ${id}`);
             }
@@ -480,13 +513,27 @@ export default function App({
             addSystemLog('No saved sessions found. Use /session new to create one.');
             return true;
           }
-          const sessionIds = sessions.map((s) => s.id);
+          const sessionItems = await Promise.all(
+            sessions.map(async (s) => {
+              // First user message makes the session recognisable in the list.
+              const full = await sessionManager.loadSession(s.id);
+              const firstUser = full?.messages.find((m) => m.role === 'user' && m.content);
+              const preview =
+                (firstUser?.content as string | undefined)?.replace(/\s+/g, ' ').trim().slice(0, 60) ||
+                '(empty)';
+              return {
+                label: preview,
+                value: s.id,
+                description: `${relativeTime(s.lastUpdatedAt)} · ${s.id.slice(0, 8)}`,
+              };
+            }),
+          );
           dispatch({
             type: 'OPEN_SELECTOR',
             selector: {
               kind: 'session',
               title: 'Select Session to Load',
-              items: sessionIds,
+              items: sessionItems,
               selectedIndex: 0,
             },
           });
@@ -666,12 +713,15 @@ export default function App({
         return;
       }
 
-      // Hydrate @file mentions then submit
+      // Hydrate @file mentions then submit. The hydrated text (with
+      // <file> blocks) goes to the model; the original text (with @path
+      // mentions) is what gets displayed in the log.
+      const display = text.replace(/\[@([^\]]+)\]/g, '@$1');
       try {
         const hydrated = await hydrateMessage(text);
-        agentApi.submitMessage(hydrated);
+        agentApi.submitMessage(hydrated, display);
       } catch {
-        agentApi.submitMessage(text);
+        agentApi.submitMessage(text, display);
       }
     },
     [handleSlashCommand, agentApi],
@@ -682,7 +732,8 @@ export default function App({
     async (selectedIndex: number) => {
       const sel = stateRef.current.pendingSelector;
       if (!sel) return;
-      const chosen = sel.items[selectedIndex];
+      const raw = sel.items[selectedIndex];
+      const chosen = typeof raw === 'string' ? raw : raw?.value ?? raw?.label;
       dispatch({ type: 'CLOSE_SELECTOR' });
 
       if (!chosen) return;
@@ -718,6 +769,11 @@ export default function App({
             dispatch({ type: 'SET_SESSION_ID', sessionId: chosen });
             dispatch({ type: 'CLEAR_LOG' });
             addSystemLog(`Loaded session: ${chosen}`);
+            for (const m of newSession.messages) {
+              if (m.role === 'user' || m.role === 'assistant') {
+                addLog({ type: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) });
+              }
+            }
           } else {
             addErrorLog(`Session not found: ${chosen}`);
           }
@@ -910,6 +966,7 @@ export default function App({
           maxHeight={paneMaxHeight}
           browseMode={browseMode}
           onBrowseModeChange={setBrowseMode}
+          agentRunning={state.agentState === 'running' || state.agentState === 'awaiting_approval'}
         />
         {/* Reserved 1-line status strip — constant height, no reflow. */}
         <Box height={1}>

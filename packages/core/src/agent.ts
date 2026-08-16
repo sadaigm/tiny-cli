@@ -77,14 +77,20 @@ export class Agent {
     continueSession: boolean = false,
     signal?: AbortSignal,
     onApproval?: (call: ToolCall) => Promise<boolean>,
-    onText?: (delta: string) => void
+    onText?: (delta: string) => void,
+    onReasoning?: (delta: string) => void
   ): Promise<AgentResponse> {
     if (!continueSession) {
       this.messages = [];
     }
 
-    // Always ensure the system prompt matches the current mode and plan state
-    this.messages = this.messages.filter(m => m.role !== 'system');
+    // Always ensure the system prompt matches the current mode and plan state.
+    // Keep compaction summaries ([PREVIOUS CONTEXT SUMMARY]) — they carry the
+    // compacted context across turns and session reloads; only the mode
+    // system prompt is replaced.
+    this.messages = this.messages.filter(
+      (m) => m.role !== 'system' || m.content.startsWith('[PREVIOUS CONTEXT SUMMARY]')
+    );
 
     let systemPrompt: string;
     if (mode === 'plan') {
@@ -170,11 +176,16 @@ GUIDANCE FOR PLAN EXECUTION:
           this.messages,
           toolDefinitions,
           signal,
-          onText
+          onText,
+          onReasoning
         );
       } catch (error: any) {
-        if (error.name === 'AbortError' || signal?.aborted) {
+        if (signal?.aborted) {
           return { content: "Execution cancelled by user.", steps };
+        }
+        if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+          // Fetch aborted but not by the user → request timeout.
+          return { content: `Request timed out after ${((this.config.requestTimeoutMs ?? 120_000) / 1000).toFixed(0)}s. Increase requestTimeoutMs in config or use a faster model.`, steps };
         }
         throw error;
       }

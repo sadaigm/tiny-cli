@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react';
 import type { Agent, AgentStep, SessionManager, ToolCall } from '@tiny-cli/core';
+import { logError } from '@tiny-cli/core';
 import type {
   TuiMode,
   LogEntry,
@@ -45,6 +46,8 @@ export interface NewLogEntry {
   toolResult?: string;
   timing?: { modelChatMs?: number; toolCallMs?: number };
   queued?: boolean;
+  /** True while this entry is actively streaming (live reasoning). */
+  live?: boolean;
   /**
    * Pre-reserved entry id (from the App's `reserveLogId`), used for the
    * live streaming assistant entry so later deltas can find it.
@@ -130,6 +133,11 @@ export interface UseAgentProps {
    * ADD_LOG reducer will use. Optional (no streaming without it).
    */
   reserveLogId?: () => string;
+  /**
+   * Flip an existing log entry's `live` flag (used to collapse the live
+   * reasoning entry once the turn moves past the thinking phase).
+   */
+  setLogLive?: (id: string, live: boolean) => void;
 }
 
 /**
@@ -143,7 +151,7 @@ export interface UseAgentApi {
    * If the agent is busy, the message is queued and processed after the
    * current turn completes.
    */
-  submitMessage: (text: string) => void;
+  submitMessage: (text: string, displayText?: string) => void;
   /** Abort the current agent turn via `AbortController`. */
   abortCurrentRun: () => void;
   /**
@@ -210,6 +218,7 @@ export function useAgent({
   getMode,
   appendLogText,
   reserveLogId,
+  setLogLive,
 }: UseAgentProps): UseAgentApi {
   // ── Refs (persist across renders without triggering re-render) ──
 
@@ -324,9 +333,19 @@ export function useAgent({
       });
 
       try {
+        // Shared with onReasoning below: the id of the live reasoning entry
+        // for this turn, so onStep (declared first) can collapse it when a
+        // tool call starts.
+        let liveReasoningId: string | null = null;
         // onStep — stream tool calls / results to the log immediately
         const onStep = (step: AgentStep): void => {
           if (step.toolCall) {
+            // Tool execution begins — the thinking phase is over, collapse
+            // the live reasoning entry.
+            if (liveReasoningId !== null) {
+              setLogLive?.(liveReasoningId, false);
+              liveReasoningId = null;
+            }
             addLog({
               type: 'tool_call',
               content: step.toolCall.function.name,
@@ -385,14 +404,33 @@ export function useAgent({
         // response below still lands as a normal entry.
         let liveEntryId: string | null = null;
         let streamedAnything = false;
+        // Live reasoning entry: `live` keeps it expanded while it streams;
+        // the flag is cleared as soon as the turn moves past the thinking
+        // phase (first text delta or tool call) so it collapses in place.
         const onText = (delta: string): void => {
           if (!appendLogText || !reserveLogId) return;
+          if (liveReasoningId !== null) {
+            setLogLive?.(liveReasoningId, false);
+            liveReasoningId = null;
+          }
           if (liveEntryId === null) {
             liveEntryId = reserveLogId();
             addLog({ type: 'assistant', content: '', _id: liveEntryId } as NewLogEntry);
           }
           streamedAnything = true;
           appendLogText(liveEntryId, delta);
+        };
+
+        // onReasoning — stream the model's thinking into its own dimmed
+        // live entry, separate from the assistant text entry.
+        const onReasoning = (delta: string): void => {
+          if (!appendLogText || !reserveLogId) return;
+          if (liveReasoningId === null) {
+            liveReasoningId = reserveLogId();
+            addLog({ type: 'reasoning', content: '', _id: liveReasoningId, live: true } as NewLogEntry);
+          }
+          appendLogText(liveReasoningId, delta);
+          setState({ spinnerText: 'Thinking…' });
         };
 
         const response = await agent.run(
@@ -403,6 +441,7 @@ export function useAgent({
           abortController.signal,
           onApproval,
           onText,
+          onReasoning,
         );
 
         // Log the final assistant response (if non-empty). When the whole
@@ -451,6 +490,7 @@ export function useAgent({
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
+        logError(`agent turn failed: ${message}\n${err instanceof Error ? err.stack ?? '' : ''}`);
         addLog({
           type: 'error',
           content: message,
@@ -477,9 +517,12 @@ export function useAgent({
    *   current turn drains the queue.
    */
   const submitMessage = useCallback(
-    (text: string): void => {
+    (text: string, displayText?: string): void => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      // What the user saw in the input (e.g. "@path" mentions, not the
+      // hydrated <file> blocks sent to the model).
+      const display = displayText?.trim() || trimmed;
 
       if (isRunningRef.current) {
         // Agent is busy — queue the message
@@ -487,14 +530,14 @@ export function useAgent({
         setState({ messageQueue: queueRef.current.toArray() });
         addLog({
           type: 'user',
-          content: trimmed,
+          content: display,
           queued: true,
         });
       } else {
         // Agent is idle — run immediately (fire-and-forget)
         addLog({
           type: 'user',
-          content: trimmed,
+          content: display,
         });
         // Fire-and-forget: do NOT await — keeps render cycle non-blocking
         void runAgentTurn(trimmed);

@@ -1,4 +1,5 @@
 import type { ToolCall } from '@tiny-cli/core';
+import type { AutocompleteItem } from './components/AutocompletePopover.js';
 
 /** Execution mode — determines which tools and system prompt the agent uses. */
 export type TuiMode = 'agent' | 'chat' | 'plan';
@@ -10,6 +11,7 @@ export type AgentState = 'idle' | 'running' | 'awaiting_approval' | 'error';
 export type LogEntryType =
   | 'user'
   | 'assistant'
+  | 'reasoning'
   | 'tool_call'
   | 'tool_result'
   | 'system'
@@ -43,6 +45,12 @@ export interface LogEntry {
   timestamp: number;
   /** True if the message was submitted while the agent was busy (queued). */
   queued?: boolean;
+  /**
+   * True while this entry is actively streaming (e.g. live reasoning).
+   * A reasoning entry collapses to one line as soon as its phase ends,
+   * even if the agent turn is still running.
+   */
+  live?: boolean;
 }
 
 /** Token and character counts for the status bar context display. */
@@ -72,8 +80,8 @@ export interface PendingSelector {
   kind: SelectorKind;
   /** Title shown in the popover header. */
   title: string;
-  /** Selectable items (plain strings). */
-  items: string[];
+  /** Selectable items (plain strings or label/value/description objects). */
+  items: AutocompleteItem[];
   /** Zero-based index of the currently highlighted item. */
   selectedIndex: number;
 }

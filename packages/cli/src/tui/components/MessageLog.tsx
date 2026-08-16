@@ -48,6 +48,11 @@ export interface MessageLogProps {
   browseMode?: boolean;
   /** Toggle browse mode on/off (called on Ctrl+P / Esc). */
   onBrowseModeChange?: (on: boolean) => void;
+  /**
+   * Whether an agent turn is in progress. While running, reasoning entries
+   * stream in full; when it flips to false they collapse to one line each.
+   */
+  agentRunning?: boolean;
 }
 
 /** Clamp a value into the inclusive range [min, max]. */
@@ -65,16 +70,23 @@ interface LogView {
   expanded: Set<string>;
   /** When true, focus pins to the tail and new appends auto-scroll. */
   autoFollow: boolean;
+  /**
+   * Line scroll within the focused entry, when it is expanded and taller
+   * than the pane. 0 = top of the entry's body.
+   */
+  lineOffset: number;
 }
 
 type LogViewAction =
-  | { type: 'FOCUS_DELTA'; delta: number; length: number }
+  | { type: 'FOCUS_DELTA'; delta: number; length: number; setOffset?: number }
   | { type: 'FOCUS_ABS'; index: number; length: number; rearm?: boolean }
+  | { type: 'SCROLL_LINE'; offset: number }
   | { type: 'TOGGLE_EXPAND'; id: string }
-  | { type: 'RECONCILE'; length: number };
+  | { type: 'RECONCILE'; length: number }
+  | { type: 'RUNNING_CHANGE'; running: boolean };
 
 function createLogView(length: number): LogView {
-  return { focusIndex: length > 0 ? length - 1 : 0, expanded: new Set(), autoFollow: true };
+  return { focusIndex: length > 0 ? length - 1 : 0, expanded: new Set(), autoFollow: true, lineOffset: 0 };
 }
 
 function logViewReducer(state: LogView, action: LogViewAction): LogView {
@@ -86,19 +98,26 @@ function logViewReducer(state: LogView, action: LogViewAction): LogView {
       const next = clamp(state.focusIndex + action.delta, 0, max);
       // Any upward movement disables auto-follow so the view stays put.
       const autoFollow = action.delta < 0 ? false : state.autoFollow && next >= max;
-      return { ...state, focusIndex: next, autoFollow };
+      // Entering a tall entry from below starts at its bottom (pager-style);
+      // `setOffset` lets the key handler decide where a new entry opens.
+      const lineOffset = action.setOffset ?? state.lineOffset;
+      return { ...state, focusIndex: next, autoFollow, lineOffset };
     }
     case 'FOCUS_ABS': {
       if (action.length === 0) return state;
       const max = action.length - 1;
       const next = clamp(action.index, 0, max);
-      return { ...state, focusIndex: next, autoFollow: action.rearm ? true : next >= max };
+      return { ...state, focusIndex: next, autoFollow: action.rearm ? true : next >= max, lineOffset: 0 };
+    }
+    case 'SCROLL_LINE': {
+      if (action.offset === state.lineOffset) return state;
+      return { ...state, lineOffset: Math.max(0, action.offset), autoFollow: false };
     }
     case 'TOGGLE_EXPAND': {
       const expanded = new Set(state.expanded);
       if (expanded.has(action.id)) expanded.delete(action.id);
       else expanded.add(action.id);
-      return { ...state, expanded };
+      return { ...state, expanded, lineOffset: 0 };
     }
     case 'RECONCILE': {
       // New entries arrived (or log cleared). Clamp focus; auto-follow pins to tail.
@@ -106,6 +125,13 @@ function logViewReducer(state: LogView, action: LogViewAction): LogView {
       const max = action.length - 1;
       const focusIndex = state.autoFollow ? max : clamp(state.focusIndex, 0, max);
       return { ...state, focusIndex };
+    }
+    case 'RUNNING_CHANGE': {
+      // When the agent turn ends, reasoning entries that streamed live
+      // collapse into one-line sections (expandable via Tab). Manual
+      // expands the user made are preserved across the transition.
+      if (action.running) return state;
+      return { ...state, expanded: new Set() };
     }
     default:
       return state;
@@ -144,7 +170,7 @@ function wrappedLineCount(text: string, usable: number): number {
  *   bodies cap at MAX_STANDARD_BODY_LINES, expanded bodies do not.
  * - system / info / error: treated like a wrapped body line.
  */
-function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>): number {
+function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number): number {
   const usable = Math.max(1, columns - BODY_INDENT);
   if (entry.type === 'tool_call' || entry.type === 'tool_result') {
     if (!expanded.has(entry.id)) return 1;
@@ -152,17 +178,56 @@ function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>):
       entry.type === 'tool_call'
         ? summarizeToolCall(entry, columns).detail
         : summarizeToolResult(entry, columns).detail;
-    return 1 + (detail ? wrappedLineCount(detail, usable) : 0);
+    let lines = 1 + (detail ? wrappedLineCount(detail, usable) : 0);
+    if (lineCap !== undefined) lines = Math.min(lines, 1 + lineCap);
+    return lines;
+  }
+  // Reasoning: 1 header + full body while streaming; 1 header + 1 body
+  // line when collapsed after the turn (matching MessageItem's render).
+  if (entry.type === 'reasoning') {
+    const rawBodyLines = entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
+    let bodyLines = entry.live || expanded.has(entry.id) ? rawBodyLines : Math.min(rawBodyLines, 1);
+    if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
+    return Math.max(1, 1 + bodyLines);
   }
   // Count rendered lines: each explicit newline is its own line, plus
   // soft-wrap for lines longer than the usable width. Collapsed standard
   // entries cap at MAX_STANDARD_BODY_LINES (matching MessageItem's render).
   const rawBodyLines = entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
-  const bodyLines = expanded.has(entry.id) ? rawBodyLines : Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
+  let bodyLines = expanded.has(entry.id) ? rawBodyLines : Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
+  if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
   // user/assistant have a header row ("❯ You:" / "🤖 Agent:"); others are body-only.
   const headerLines = entry.type === 'user' || entry.type === 'assistant' ? 1 : 0;
   return Math.max(1, headerLines + bodyLines);
 }
+
+/**
+ * The wrapped body-line count of an entry as currently rendered (expanded
+ * state honoured). Used to decide when ↑/↓ should scroll inside the focused
+ * entry instead of moving to its neighbours.
+ */
+function renderedBodyLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning: boolean): number {
+  const usable = Math.max(1, columns - BODY_INDENT);
+  if (entry.type === 'tool_call' || entry.type === 'tool_result') {
+    if (!expanded.has(entry.id)) return 0;
+    const detail =
+      entry.type === 'tool_call'
+        ? summarizeToolCall(entry, columns).detail
+        : summarizeToolResult(entry, columns).detail;
+    return detail ? wrappedLineCount(detail, usable) : 0;
+  }
+  if (entry.type === 'reasoning') {
+    if (entry.content.length === 0) return 0;
+    const raw = wrappedLineCount(entry.content, usable);
+    return entry.live || expanded.has(entry.id) ? raw : Math.min(raw, 1);
+  }
+  if (entry.content.length === 0) return 0;
+  const raw = wrappedLineCount(entry.content, usable);
+  return expanded.has(entry.id) ? raw : Math.min(raw, MAX_STANDARD_BODY_LINES);
+}
+
+/** Lines of an entry's body the pane can show (1 pane header, 1 entry header). */
+const VISIBLE_BODY_BUDGET = (paneHeight: number): number => Math.max(1, paneHeight - 2);
 
 /** Result of computing the visible window for the current focus + size. */
 interface Window {
@@ -186,18 +251,29 @@ function computeWindow(
   columns: number,
   autoFollow: boolean,
   expanded: Set<string>,
+  agentRunning: boolean,
 ): Window {
   const n = entries.length;
   if (n === 0 || paneHeight <= 1) {
     return { startIndex: 0, endIndex: 0, linesAbove: 0, linesBelow: 0 };
   }
+  // When the focused entry is expanded taller than the pane, its body is
+  // windowed to this many lines (see MessageItem's maxLines) — cap the
+  // estimate to match so the viewport math stays honest.
+  const focusBudget = VISIBLE_BODY_BUDGET(paneHeight);
+  const capFor = (i: number): number | undefined => {
+    if (i !== focusIndex) return undefined;
+    return estimateLines(entries[i], columns, expanded, agentRunning) - 1 > focusBudget
+      ? focusBudget
+      : undefined;
+  };
   // Auto-follow: always show the tail.
   if (autoFollow) {
     const budget = paneHeight - 1;
     let start = n;
     let used = 0;
     for (let i = n - 1; i >= 0; i--) {
-      const cost = estimateLines(entries[i], columns, expanded);
+      const cost = estimateLines(entries[i], columns, expanded, agentRunning, capFor(i));
       if (used + cost > budget && start < n) break;
       used += cost;
       start = i;
@@ -209,18 +285,18 @@ function computeWindow(
   const budget = paneHeight - 1;
   let start = focusIndex;
   let end = focusIndex + 1;
-  let used = estimateLines(entries[focusIndex], columns, expanded);
+  let used = estimateLines(entries[focusIndex], columns, expanded, agentRunning, capFor(focusIndex));
 
   // Grow downward.
   while (end < n && used < budget) {
-    const cost = estimateLines(entries[end], columns, expanded);
+    const cost = estimateLines(entries[end], columns, expanded, agentRunning, capFor(end));
     if (used + cost > budget) break;
     used += cost;
     end++;
   }
   // Grow upward.
   while (start > 0 && used < budget) {
-    const cost = estimateLines(entries[start - 1], columns, expanded);
+    const cost = estimateLines(entries[start - 1], columns, expanded, agentRunning, capFor(start - 1));
     if (used + cost > budget) break;
     used += cost;
     start--;
@@ -256,7 +332,7 @@ const isEnd = (input: string): boolean =>
  * ```
  */
 const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function MessageLog(
-  { entries, maxHeight, active = false, browseMode = false, onBrowseModeChange },
+  { entries, maxHeight, active = false, browseMode = false, onBrowseModeChange, agentRunning = false },
   ref,
 ): React.ReactElement {
   const { stdout } = useStdout();
@@ -290,6 +366,15 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     }
   }, [entries.length]);
 
+  // Collapse reasoning sections when a turn finishes (running → false).
+  const prevRunningRef = useRef(agentRunning);
+  useEffect(() => {
+    if (prevRunningRef.current && !agentRunning) {
+      dispatch({ type: 'RUNNING_CHANGE', running: false });
+    }
+    prevRunningRef.current = agentRunning;
+  }, [agentRunning]);
+
   // ── Browse mode ──────────────────────────────────────────────────────
   // The conversation pane never competes with the InputBox for printable
   // keys or the arrows/Tab that text editing uses. Instead the user enters
@@ -318,6 +403,10 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   focusIndexRef.current = view.focusIndex;
   const paneHeightRef = useRef(paneHeight);
   paneHeightRef.current = paneHeight;
+  const paneColumnsRef = useRef(paneColumns);
+  paneColumnsRef.current = paneColumns;
+  const viewRef = useRef(view);
+  viewRef.current = view;
 
   // Single always-on listener (when the pane is the active context).
   // Using ONE useInput — rather than two toggling ones — keeps Ink's raw
@@ -341,9 +430,42 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
           return;
         }
         if (n === 0) return;
-        if (key.upArrow) dispatch({ type: 'FOCUS_DELTA', delta: -1, length: n });
-        else if (key.downArrow) dispatch({ type: 'FOCUS_DELTA', delta: 1, length: n });
-        else if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeightRef.current - 1), length: n });
+        if (key.upArrow || key.downArrow) {
+          const dir = key.upArrow ? -1 : 1;
+          const focused = entriesRef.current[viewRef.current.focusIndex];
+          const lines = focused
+            ? renderedBodyLines(focused, paneColumnsRef.current, viewRef.current.expanded, agentRunning)
+            : 0;
+          const visible = VISIBLE_BODY_BUDGET(paneHeightRef.current);
+          if (lines > visible) {
+            // Tall expanded entry: ↑/↓ scroll inside it first; once the
+            // edge is reached, movement continues to the neighbour entry.
+            const offset = viewRef.current.lineOffset;
+            if (dir > 0 && offset < lines - visible) {
+              dispatch({ type: 'SCROLL_LINE', offset: offset + 1 });
+              return;
+            }
+            if (dir < 0 && offset > 0) {
+              dispatch({ type: 'SCROLL_LINE', offset: offset - 1 });
+              return;
+            }
+          }
+          // Moving up into a tall entry lands at its bottom; moving down
+          // into one lands at its top.
+          const entering = viewRef.current.focusIndex + dir;
+          const target = entriesRef.current[entering];
+          let setOffset: number | undefined;
+          if (target) {
+            const targetLines = renderedBodyLines(
+              target, paneColumnsRef.current, viewRef.current.expanded, agentRunning);
+            if (dir < 0 && targetLines > VISIBLE_BODY_BUDGET(paneHeightRef.current)) {
+              setOffset = targetLines - VISIBLE_BODY_BUDGET(paneHeightRef.current);
+            }
+          }
+          dispatch({ type: 'FOCUS_DELTA', delta: dir, length: n, setOffset });
+          return;
+        }
+        if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeightRef.current - 1), length: n });
         else if (key.pageDown) dispatch({ type: 'FOCUS_DELTA', delta: paneHeightRef.current - 1, length: n });
         else if (key.tab) {
           const focusedId = entriesRef.current[focusIndexRef.current]?.id;
@@ -367,8 +489,10 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     },
     // Intentionally minimal: all branched-on values are read through refs
     // (see above), so re-creating the callback on every change is pointless —
-    // useInput wouldn't pick up the new instance anyway.
-    [setBrowse],
+    // useInput wouldn't pick up the new instance anyway. agentRunning is
+    // read directly but only flips rarely; a stale value for one render is
+    // harmless (it only affects scroll-eligibility of reasoning entries).
+    [setBrowse, agentRunning],
   );
   useInput(onPaneKey, { isActive: active });
 
@@ -394,8 +518,8 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
 
   // Compute the visible window — memoised on relevant inputs.
   const win = useMemo(
-    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded),
-    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded],
+    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning),
+    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning],
   );
 
   const visibleEntries = entries.slice(win.startIndex, win.endIndex);
@@ -414,15 +538,28 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     // exact row budget. computeWindow limits visibleEntries to fit.
     <Box flexDirection="column" height={paneHeight} overflowY="hidden">
       <Text dimColor> {headerText}</Text>
-      {visibleEntries.map((entry) => (
-        <MessageItem
-          key={entry.id}
-          entry={entry}
-          focused={entry.id === entries[view.focusIndex]?.id}
-          expanded={view.expanded.has(entry.id)}
-          columns={paneColumns}
-        />
-      ))}
+      {visibleEntries.map((entry) => {
+        const isFocused = entry.id === entries[view.focusIndex]?.id;
+        // Only the focused entry participates in line-level scrolling: its
+        // body is windowed to the pane budget at the current offset. Other
+        // entries render whole (they were small enough to share the pane).
+        const budget = VISIBLE_BODY_BUDGET(paneHeight);
+        const scrollable =
+          isFocused &&
+          renderedBodyLines(entry, paneColumns, view.expanded, agentRunning) > budget;
+        return (
+          <MessageItem
+            key={entry.id}
+            entry={entry}
+            focused={isFocused}
+            expanded={view.expanded.has(entry.id)}
+            agentRunning={agentRunning}
+            columns={paneColumns}
+            lineOffset={scrollable ? view.lineOffset : 0}
+            maxLines={scrollable ? budget : undefined}
+          />
+        );
+      })}
       {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
     </Box>
   );
