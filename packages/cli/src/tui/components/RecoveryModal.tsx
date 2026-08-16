@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useStdout } from 'ink';
 import type { PendingRecovery } from '../state.js';
 import type { RecoveryChoice } from '../hooks/useAgent.js';
 
@@ -33,15 +33,36 @@ export default function RecoveryModal({ recovery, onSelect }: RecoveryModalProps
     }
   });
 
+  const { stdout } = useStdout();
+  const rows = stdout?.rows ?? 24;
+  const columns = stdout?.columns ?? 80;
+  // Fixed height: border (2) + paddingY (2) + title (2, incl. margin) +
+  // task line (2, incl. margin) + 4 options + hint (1) = 13 rows.
+  const MODAL_HEIGHT = 13;
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={2} paddingY={1}>
+    // Absolute overlay: floats over the conversation without reserving
+    // rows or reflowing the layout (same approach as ApprovalModal).
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="yellow"
+      paddingX={2}
+      paddingY={1}
+      position="absolute"
+      top={Math.max(1, Math.floor((rows - MODAL_HEIGHT) / 2))}
+      left={2}
+      width={columns - 4}
+    >
       <Box marginBottom={1}>
         <Text bold color="yellow">⚠ Task not marked complete</Text>
       </Box>
 
       <Box marginBottom={1}>
         <Text>Task {recovery.taskIndex + 1}/{recovery.totalTasks}: </Text>
-        <Text dimColor>{recovery.taskText}</Text>
+        {/* wrap="truncate" keeps the task on one line so the modal's fixed
+            height (and the centering math above) stays valid. */}
+        <Text dimColor wrap="truncate">{recovery.taskText}</Text>
       </Box>
 
       {OPTIONS.map((opt, i) => (

@@ -93,6 +93,7 @@ export default function ApprovalModal({
   // JSON blob that would wrap and break the modal layout.
   const { stdout } = useStdout();
   const columns = stdout?.columns ?? 80;
+  const rows = stdout?.rows ?? 24;
   const summary = summarizeToolCall(
     {
       id: 'approval',
@@ -110,7 +111,18 @@ export default function ApprovalModal({
     : '';
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
+    // Absolute overlay: taken out of the flex flow so it floats over the
+    // conversation without reserving rows or reflowing the layout.
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="yellow"
+      paddingX={1}
+      position="absolute"
+      top={Math.max(1, Math.floor((rows - 7) / 2))}
+      left={2}
+      width={columns - 4}
+    >
       <Text color="yellow" bold>
         ⚠  Tool Approval Required
       </Text>
@@ -122,7 +134,7 @@ export default function ApprovalModal({
 
       {argPreview ? (
         <Box marginLeft={2}>
-          <Text dimColor color="gray">
+          <Text dimColor color="gray" wrap="truncate">
             {argPreview}
           </Text>
         </Box>

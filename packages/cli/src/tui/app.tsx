@@ -910,6 +910,7 @@ export default function App({
 
   const { stdout } = useStdout();
   const terminalRows = stdout?.rows ?? 24;
+  const terminalColumns = stdout?.columns ?? 80;
 
   // The conversation pane may consume keys only when no higher-priority
   // consumer is open (key-precedence ladder: modal > selector > autocomplete).
@@ -1034,13 +1035,18 @@ export default function App({
         <RecoveryModal recovery={state.pendingRecovery} onSelect={agentApi.resolveRecovery} />
       ) : null}
 
-      {/* Inline selector overlay (model / mode / session picker) */}
+      {/* Inline selector overlay (model / mode / session picker) —
+          absolutely positioned so it floats above the input row without
+          reserving rows in the flex layout. Bottom-anchored: it grows
+          upward from just above the input (bottom box 5 + input 1 + gap 1). */}
       {state.pendingSelector ? (
-        <AutocompletePopover
-          items={state.pendingSelector.items}
-          selectedIndex={state.pendingSelector.selectedIndex}
-          title={state.pendingSelector.title}
-        />
+        <Box position="absolute" bottom={bottomBoxHeight + inputHeight + 1} left={2} width={terminalColumns - 4}>
+          <AutocompletePopover
+            items={state.pendingSelector.items}
+            selectedIndex={state.pendingSelector.selectedIndex}
+            title={state.pendingSelector.title}
+          />
+        </Box>
       ) : null}
 
       {/* Mouse-wheel → conversation pane scroll (opt-in via /mouse) */}
