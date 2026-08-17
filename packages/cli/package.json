@@ -9,23 +9,33 @@
   "scripts": {
     "build": "tsc",
     "start": "node ./dist/index.js",
-    "dev": "tsc -w"
+    "dev": "tsc -w",
+    "test": "vitest run",
+    "web": "vite serve web"
   },
   "dependencies": {
     "@tiny-cli/core": "workspace:*",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "fuzzy": "^0.1.3",
-    "inquirer": "^9.3.6",
-    "inquirer-autocomplete-prompt": "^3.0.1",
+    "ink": "^7.1.1",
+    "ink-spinner": "^5.0.0",
     "node-fetch": "^3.3.2",
-    "ora": "^8.0.1"
+    "react": "^19.1.0"
   },
   "devDependencies": {
-    "@types/inquirer": "^9.0.7",
-    "@types/inquirer-autocomplete-prompt": "^3.0.3",
     "@types/node": "^20.14.12",
     "@types/node-fetch": "^2.6.11",
-    "typescript": "^5.5.4"
+    "@types/react": "^19.1.8",
+    "@vitejs/plugin-react-swc": "^4.3.3",
+    "@xterm/xterm": "^5.5.0",
+    "ink-testing-library": "^4.0.0",
+    "ink-web": "^0.2.0",
+    "os-browserify": "^0.3.0",
+    "path-browserify": "^1.0.1",
+    "react-dom": "^19.1.0",
+    "typescript": "^5.5.4",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
   }
 }

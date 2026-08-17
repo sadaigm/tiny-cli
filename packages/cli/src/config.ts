@@ -23,6 +23,8 @@ interface AgentProfile {
   permissionMode?: PermissionMode;
   logLevel?: LogLevel;
   maxIterations?: number;
+  compactionThresholdTokens?: number;
+  compactionRetainTokens?: number;
   environment?: {
     hostUrl?: string;
     appBasePath?: string;
@@ -89,7 +91,9 @@ export async function loadConfig(): Promise<AgentConfig> {
           mcpServers: profile.mcpServers,
           permissionMode: profile.permissionMode,
           logLevel: profile.logLevel,
-          maxIterations: profile.maxIterations
+          maxIterations: profile.maxIterations,
+          compactionThresholdTokens: profile.compactionThresholdTokens,
+          compactionRetainTokens: profile.compactionRetainTokens
         };
 
         // Merge global settings (like lastSessionId)

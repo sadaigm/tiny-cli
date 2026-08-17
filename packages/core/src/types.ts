@@ -51,6 +51,10 @@ export interface AgentConfig {
   logLevel?: LogLevel;
   requestTimeoutMs?: number;
   maxIterations?: number;
+  /** Token count at which the agent compacts older conversation history into a summary. Defaults to 35000. */
+  compactionThresholdTokens?: number;
+  /** Number of recent tokens kept raw (not summarized) during memory compaction. Defaults to 8000. */
+  compactionRetainTokens?: number;
 }
 
 export interface ToolDefinition {
@@ -81,6 +85,12 @@ export interface AgentResponse {
   content: string;
   steps: AgentStep[];
   plan?: string[];
+  /**
+   * True when the final assistant text was already delivered
+   * incrementally through the `run()` `onText` callback — lets the UI
+   * skip re-appending the full blob after the turn ends.
+   */
+  streamedFinal?: boolean;
 }
 
 export interface SessionMetadata {

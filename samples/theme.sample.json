@@ -1,0 +1,13 @@
+{
+  "user": "green",
+  "assistant": "blue",
+  "toolCall": "cyan",
+  "toolResult": "gray",
+  "system": "gray",
+  "error": "red",
+  "border": "cyan",
+  "borderStatus": "cyan",
+  "statusText": "cyan",
+  "accent": "magenta",
+  "warning": "yellow"
+}
