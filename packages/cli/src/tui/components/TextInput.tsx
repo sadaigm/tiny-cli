@@ -36,6 +36,12 @@ export interface TextInputProps {
    * the key (used by InputBox to open reverse-i-search of input history).
    */
   onSearch?: () => void;
+  /**
+   * Increment to snap the cursor to the end on the next render — used when
+   * the parent programmatically replaces the value (e.g. the slash picker
+   * inserting `/create-skill `), which the clamp effect alone won't reposition.
+   */
+  cursorToEndSignal?: number;
 }
 
 /**
@@ -70,6 +76,7 @@ export default function TextInput({
   showCursor = true,
   focus = true,
   onSearch,
+  cursorToEndSignal = 0,
 }: TextInputProps): React.ReactElement {
   const [cursorOffset, setCursorOffset] = useState(value.length);
 
@@ -177,6 +184,12 @@ export default function TextInput({
     if (focus) setCursorOffset(value.length);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus]);
+
+  // Parent-requested snap (programmatic value replacement).
+  useEffect(() => {
+    if (cursorToEndSignal > 0) setCursorOffset(value.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursorToEndSignal]);
 
   return (
     <Text color={value.length > 0 ? getTheme().user : getTheme().system}>

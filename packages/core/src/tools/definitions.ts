@@ -202,7 +202,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
   };
   registry.register(writeDef, async (args) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid. You must provide the file path.';
-    if (args.content === undefined) return 'Error: "content" argument is missing. You must provide the content to write.';
+    if (args.content === undefined) return 'Error: "content" argument is missing. You must generate the full file content yourself and retry the write with a complete "content" string. Do not ask the user for it.';
     const fullPath = path.resolve(process.cwd(), args.path);
     try {
       await mkdir(path.dirname(fullPath), { recursive: true });
@@ -210,6 +210,73 @@ export function registerDefaultTools(registry: ToolRegistry) {
       return `Successfully wrote to ${args.path}`;
     } catch (error: any) {
       return `Error writing to ${args.path}: ${error.message}`;
+    }
+  });
+
+  // create_skill
+  const createSkillDef: ToolDefinition = {
+    name: 'create_skill',
+    description:
+      'Create a new agent skill. Writes a SKILL.md (frontmatter + body) into the skills directory. ' +
+      'You must author the body yourself — a Markdown procedure for an agent to follow, not user docs.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Skill name: lowercase a-z, 0-9, hyphens; 1-64 chars',
+        },
+        description: {
+          type: 'string',
+          description: 'One sentence: what the skill does + when to use it (under 1024 chars)',
+        },
+        body: {
+          type: 'string',
+          description: 'Markdown body of SKILL.md (starts with "# <Title>", imperative steps the agent executes)',
+        },
+        location: {
+          type: 'string',
+          description: "Where the skill lives: 'project' (.tiny-cli/skills/, shared) or 'global' (~/.tiny-cli/agent/skills/, personal). Default: project",
+        },
+      },
+      required: ['name', 'description', 'body'],
+    },
+    isModifying: true,
+  };
+  registry.register(createSkillDef, async (args) => {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    const description = typeof args.description === 'string' ? args.description.trim() : '';
+    const body = typeof args.body === 'string' ? args.body : '';
+    const location = args.location === 'global' ? 'global' : 'project';
+
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name) || name.length > 64) {
+      return 'Error: "name" is invalid. Use lowercase a-z, 0-9 and single hyphens (1-64 chars), e.g. "testcase-writer".';
+    }
+    if (!description) {
+      return 'Error: "description" argument is missing. Write one sentence stating what the skill does and when to use it.';
+    }
+    if (description.length > 1024) {
+      return 'Error: "description" must be under 1024 characters.';
+    }
+    if (!body.trim()) {
+      return 'Error: "body" argument is missing. You must author the full Markdown procedure yourself and retry. Do not ask the user for it.';
+    }
+
+    const skillsRoot =
+      location === 'global'
+        ? path.join(process.env.HOME || '', '.tiny-cli', 'agent', 'skills')
+        : path.resolve(process.cwd(), '.tiny-cli', 'skills');
+    const skillDir = path.join(skillsRoot, name);
+    try {
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        path.join(skillDir, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${description}\n---\n\n${body.trim()}\n`,
+        'utf-8',
+      );
+      return `Successfully created skill "${name}" at ${skillDir}/SKILL.md (${location}). It is picked up on the next session (or immediately via discovery).`;
+    } catch (error: any) {
+      return `Error creating skill "${name}": ${error.message}`;
     }
   });
 
@@ -447,9 +514,16 @@ export function registerDefaultTools(registry: ToolRegistry) {
     const taskPath = path.join(planDir, 'current_task.md');
     
     try {
-      const content = await readFile(taskPath, 'utf-8');
+      // No plan file → not a planned session; nothing to mark. Say so
+      // calmly instead of surfacing an ENOENT error to the model.
+      let content: string;
+      try {
+        content = await readFile(taskPath, 'utf-8');
+      } catch {
+        return `No active plan for this session — nothing to mark. Treat this as confirmation the task is complete.${args.notes ? ' Notes: ' + args.notes : ''}`;
+      }
       const lines = content.split('\n');
-      
+
       // Find the first incomplete task and mark it done
       let modified = false;
       const newLines = lines.map(line => {

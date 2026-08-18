@@ -31,6 +31,8 @@ import {
  * have tabbed away.
  */
 const BELL_MIN_TURN_MS = 10_000;
+/** Live reasoning streams expanded up to this many lines, then auto-collapses. */
+const MAX_LIVE_REASONING_LINES = 3;
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -332,20 +334,27 @@ export function useAgent({
         spinnerText: spinnerPrefix ? `${spinnerPrefix}…` : 'Thinking…',
       });
 
+      // Shared with onReasoning below: the id of the live reasoning entry
+      // for this turn, so onStep and the turn-end/error paths can collapse
+      // it once the thinking phase is over (or it exceeds the line budget).
+      let liveReasoningId: string | null = null;
+      let reasoningCollapsed = false;
+      let reasoningBuf = '';
+      const collapseReasoning = (): void => {
+        if (liveReasoningId !== null && !reasoningCollapsed) {
+          reasoningCollapsed = true;
+          setLogLive?.(liveReasoningId, false);
+        }
+      };
+
       try {
-        // Shared with onReasoning below: the id of the live reasoning entry
-        // for this turn, so onStep (declared first) can collapse it when a
-        // tool call starts.
-        let liveReasoningId: string | null = null;
         // onStep — stream tool calls / results to the log immediately
         const onStep = (step: AgentStep): void => {
           if (step.toolCall) {
             // Tool execution begins — the thinking phase is over, collapse
             // the live reasoning entry.
-            if (liveReasoningId !== null) {
-              setLogLive?.(liveReasoningId, false);
-              liveReasoningId = null;
-            }
+            collapseReasoning();
+            liveReasoningId = null;
             addLog({
               type: 'tool_call',
               content: step.toolCall.function.name,
@@ -410,7 +419,7 @@ export function useAgent({
         const onText = (delta: string): void => {
           if (!appendLogText || !reserveLogId) return;
           if (liveReasoningId !== null) {
-            setLogLive?.(liveReasoningId, false);
+            collapseReasoning();
             liveReasoningId = null;
           }
           if (liveEntryId === null) {
@@ -427,9 +436,16 @@ export function useAgent({
           if (!appendLogText || !reserveLogId) return;
           if (liveReasoningId === null) {
             liveReasoningId = reserveLogId();
+            reasoningBuf = '';
             addLog({ type: 'reasoning', content: '', _id: liveReasoningId, live: true } as NewLogEntry);
           }
           appendLogText(liveReasoningId, delta);
+          // Auto-collapse once the thinking exceeds the line budget — a
+          // long reasoning stream shouldn't flood the pane while it runs.
+          reasoningBuf += delta;
+          if (reasoningBuf.split('\n').length > MAX_LIVE_REASONING_LINES) {
+            collapseReasoning();
+          }
           setState({ spinnerText: 'Thinking…' });
         };
 
@@ -462,6 +478,11 @@ export function useAgent({
         // Persist session history
         await saveSession();
 
+        // Safety net: agent.run can return early (abort, timeout) without
+        // firing onStep/onText — make sure the reasoning entry is collapsed.
+        collapseReasoning();
+        liveReasoningId = null;
+
         // ── Queue drain ──────────────────────────────────────────
         const nextMessage = queueRef.current.dequeue();
         if (nextMessage) {
@@ -489,6 +510,7 @@ export function useAgent({
           }
         }
       } catch (err: unknown) {
+        collapseReasoning();
         const message = err instanceof Error ? err.message : String(err);
         logError(`agent turn failed: ${message}\n${err instanceof Error ? err.stack ?? '' : ''}`);
         addLog({

@@ -129,6 +129,9 @@ function InputBox({
   focus = true,
 }: InputBoxProps): React.ReactElement {
   const [value, setValue] = useState('');
+  // Bumped whenever we programmatically replace the input value, so
+  // TextInput snaps its cursor to the end (see cursorToEndSignal).
+  const [cursorEndSignal, setCursorEndSignal] = useState(0);
 
   // --- input history -------------------------------------------------------
   // Submitted lines are recalled with ↑/↓ exactly like a shell. The cursor
@@ -183,7 +186,6 @@ function InputBox({
   // `hydrateMessage()` on submit.
   const [mentionActive, setMentionActive] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
-  const [mentionSelected, setMentionSelected] = useState(0);
 
   const mentionItems = useMemo(
     () => (mentionActive ? searchFiles(fileIndex, mentionQuery) : []),
@@ -243,7 +245,6 @@ function InputBox({
       if (next.startsWith('/')) {
         setSlashActive(true);
         setSlashQuery(next.slice(1));
-        setSlashSelected(0);
         setMentionActive(false);
         return;
       }
@@ -256,7 +257,6 @@ function InputBox({
       } else {
         setMentionActive(true);
         setMentionQuery(query);
-        setMentionSelected(0);
       }
     },
     [fileIndex.length, trailingMention],
@@ -273,7 +273,7 @@ function InputBox({
       });
       setMentionActive(false);
       setMentionQuery('');
-      setMentionSelected(0);
+      setCursorEndSignal((n) => n + 1);
     },
     [],
   );
@@ -284,7 +284,6 @@ function InputBox({
   // runs the command (clears the input and submits `/name`).
   const [slashActive, setSlashActive] = useState(false);
   const [slashQuery, setSlashQuery] = useState('');
-  const [slashSelected, setSlashSelected] = useState(0);
 
   const slashItems: SlashCommand[] = useMemo(() => {
     if (!slashActive) return [];
@@ -293,14 +292,24 @@ function InputBox({
     return matches;
   }, [slashActive, slashQuery]);
 
-  /** Run a slash command: clear input, close picker, submit `/name`. */
+  /** Run a slash command: clear input, close picker, submit `/name`.
+   *  Commands that take arguments are inserted for completion instead. */
   const acceptSlash = useCallback(
-    (cmd: SlashCommand) => {
+    (cmdValue: string) => {
+      // Extract command name from the value (e.g., "/agent" -> "agent")
+      const cmdName = cmdValue.replace(/^\//, '');
+      const cmd = SLASH_COMMANDS.find(c => `/${c.name}` === cmdValue);
+
       setSlashActive(false);
       setSlashQuery('');
-      setSlashSelected(0);
       setValue('');
-      onSubmit(`/${cmd.name}`);
+
+      if (cmd?.takesArgs) {
+        setValue(`/${cmd.name} `);
+        setCursorEndSignal((n) => n + 1);
+      } else {
+        onSubmit(cmdValue);
+      }
     },
     [onSubmit],
   );
@@ -407,22 +416,17 @@ function InputBox({
 
   const handleSubmit = useCallback(
     (submittedValue: string) => {
-      // If the slash-command picker is open, Enter runs the highlighted command.
-      if (slashActive && slashItems[slashSelected]) {
-        acceptSlash(slashItems[slashSelected]);
-        return;
-      }
-      // If the mention picker is open, Enter accepts the highlighted file
-      // instead of submitting the message.
-      if (mentionActive && mentionItems[mentionSelected]) {
-        acceptMention(mentionItems[mentionSelected]);
-        return;
-      }
       // Expand any paste chips back to their raw text before submitting, then
       // trim. hydrateMessage (in the app layer) further expands @file tokens.
       const expanded = expandPasteChips(submittedValue, pastesRef.current);
       const trimmed = expanded.trim();
       if (trimmed.length === 0) return;
+
+      // While a picker is open, Enter belongs to it (accept the highlighted
+      // item), not to submit — otherwise the draft would be sent as-is.
+      if ((mentionActive && mentionItems.length > 0) || (slashActive && slashItems.length > 0)) {
+        return;
+      }
 
       if (showAutocomplete && onAutocompleteAccept) {
         onAutocompleteAccept(trimmed);
@@ -443,13 +447,9 @@ function InputBox({
       showAutocomplete,
       onAutocompleteAccept,
       mentionActive,
-      mentionItems,
-      mentionSelected,
-      acceptMention,
+      mentionItems.length,
       slashActive,
-      slashItems,
-      slashSelected,
-      acceptSlash,
+      slashItems.length,
     ],
   );
 
@@ -480,36 +480,7 @@ function InputBox({
     { isActive: historyKeysActive },
   );
 
-  const pickerActive = focus && (slashActive || mentionActive);
-  useInput(
-    (_input, key) => {
-      // Slash-command picker
-      if (slashActive) {
-        if (key.upArrow) {
-          setSlashSelected((i) => (i - 1 + slashItems.length) % slashItems.length);
-        } else if (key.downArrow) {
-          setSlashSelected((i) => (i + 1) % slashItems.length);
-        } else if (key.tab || key.return) {
-          if (slashItems[slashSelected]) acceptSlash(slashItems[slashSelected]);
-        } else if (key.escape) {
-          setSlashActive(false);
-        }
-        return;
-      }
-      // @file-mention picker
-      if (!mentionActive) return;
-      if (key.upArrow) {
-        setMentionSelected((i) => (i - 1 + mentionItems.length) % mentionItems.length);
-      } else if (key.downArrow) {
-        setMentionSelected((i) => (i + 1) % mentionItems.length);
-      } else if (key.tab || key.return) {
-        if (mentionItems[mentionSelected]) acceptMention(mentionItems[mentionSelected]);
-      } else if (key.escape) {
-        setMentionActive(false);
-      }
-    },
-    { isActive: pickerActive },
-  );
+  // --- Render ---------------------------------------------------------------
 
   // --- Render ---------------------------------------------------------------
 
@@ -556,6 +527,7 @@ function InputBox({
               showCursor={true}
               focus={focus}
               onSearch={openSearch}
+              cursorToEndSignal={cursorEndSignal}
             />
           </Box>
         </Box>
@@ -567,8 +539,10 @@ function InputBox({
           <AutocompletePopover
             title={`Commands (/${slashQuery})`}
             items={slashItems.map((c) => ({ label: `/${c.name}`, description: c.description }))}
-            selectedIndex={slashSelected}
             maxVisible={MENTION_POPOVER_ROWS - 1}
+            onSelect={acceptSlash}
+            onDismiss={() => setSlashActive(false)}
+            isActive={slashActive}
           />
         </Box>
       ) : mentionActive && mentionItems.length > 0 ? (
@@ -578,8 +552,10 @@ function InputBox({
           <AutocompletePopover
             title={`Mention file (@${mentionQuery})`}
             items={mentionItems}
-            selectedIndex={mentionSelected}
             maxVisible={MENTION_POPOVER_ROWS - 1}
+            onSelect={acceptMention}
+            onDismiss={() => setMentionActive(false)}
+            isActive={mentionActive}
           />
         </Box>
       ) : null}

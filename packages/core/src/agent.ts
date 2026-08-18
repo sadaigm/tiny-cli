@@ -25,6 +25,8 @@ import {
   BASH_LOCK,
   MCP_LOCK,
 } from "./concurrency.js";
+import { loadSkills, renderSkillsXml } from "@tiny-cli/resources";
+import { logDebug } from "./logger.js";
 
 export class Agent {
   private model: ModelClient;
@@ -114,6 +116,37 @@ export class Agent {
     systemPrompt = systemPrompt
       .replace("${process.cwd()}", process.cwd())
       .replace("${process.platform()}", process.platform);
+
+    // Inject available agent skills into the system prompt (re-derived each run)
+    const skillsResult = await loadSkills(
+      this.config.skillsOptions ?? { settingsSkills: [], cliSkills: [], noSkills: false, trusted: false }
+    );
+    for (const w of skillsResult.warnings) logDebug(w.message);
+    const skillsXml = renderSkillsXml(skillsResult.skills);
+    if (skillsXml) systemPrompt += `\n\n${skillsXml}`;
+
+    // Active skills (selected via /skills): inject the full body so the
+    // procedure is always in context. Re-derived each run, so it survives
+    // compaction and session reloads.
+    const activeNames = this.config.activeSkills ?? [];
+    if (activeNames.length > 0) {
+      const activeBlocks: string[] = [];
+      for (const name of activeNames) {
+        const skill = skillsResult.skills.find((s) => s.name === name);
+        if (!skill) continue;
+        try {
+          const body = await fs.readFile(skill.path, 'utf-8');
+          activeBlocks.push(
+            `<active_skill name="${name}">\n${body}\n</active_skill>`
+          );
+        } catch {
+          // Skill file unreadable — skip silently; metadata listing above still applies.
+        }
+      }
+      if (activeBlocks.length > 0) {
+        systemPrompt += `\n\n<active_skills>\n${activeBlocks.join('\n')}\n</active_skills>`;
+      }
+    }
 
     // Mandatory instruction for tool usage discipline
     if (mode === 'chat') {

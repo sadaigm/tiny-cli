@@ -1,5 +1,7 @@
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
 
+import type { LoadSkillsOptions } from "@tiny-cli/resources";
+
 export interface ToolCall {
   id: string;
   type: 'function';
@@ -55,6 +57,12 @@ export interface AgentConfig {
   compactionThresholdTokens?: number;
   /** Number of recent tokens kept raw (not summarized) during memory compaction. Defaults to 8000. */
   compactionRetainTokens?: number;
+  /** Options for agent-skill discovery; when set, available skills are injected into the system prompt. */
+  skillsOptions?: LoadSkillsOptions;
+  /** Whether /skill:<name> commands are enabled in the TUI. Defaults to true. */
+  enableSkillCommands?: boolean;
+  /** Names of skills the user activated (e.g. via /skills); their full body is injected into the system prompt on every run. */
+  activeSkills?: string[];
 }
 
 export interface ToolDefinition {

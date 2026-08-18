@@ -13,6 +13,8 @@ export interface SlashCommand {
   name: string;
   /** One-line description shown dimmed in the picker. */
   description: string;
+  /** When true, the picker inserts `/name ` for completion instead of running it bare. */
+  takesArgs?: boolean;
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -30,6 +32,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'clear', description: 'Clear conversation history' },
   { name: 'compact', description: 'Summarize old history to shrink context now' },
   { name: 'mouse', description: 'Toggle mouse-wheel scrolling on/off' },
+  { name: 'skills', description: 'List loaded skills and warnings' },
+  { name: 'create-skill', description: 'Scaffold a new skill (/create-skill <description>)', takesArgs: true },
   { name: 'help', description: 'List commands and keyboard shortcuts' },
   { name: 'exit', description: 'Save session and quit' },
 ];

@@ -66,7 +66,7 @@ export interface ContextStats {
  * - `mode`     — choose a permission mode (notify/auto-edit/auto).
  * - `session`  — choose a saved session to load.
  */
-export type SelectorKind = 'model' | 'mode' | 'session' | 'mcp';
+export type SelectorKind = 'model' | 'mode' | 'session' | 'mcp' | 'skill';
 
 /**
  * State for the inline AutocompletePopover overlay used by

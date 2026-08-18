@@ -3,7 +3,7 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { SessionManager } from '@tiny-cli/core';
 import type { Agent, Session, AgentConfig } from '@tiny-cli/core';
 
-import type { TuiState, TuiMode, LogEntry, ContextStats, PendingSelector } from './state.js';
+import type { TuiState, TuiMode, LogEntry, ContextStats, PendingSelector, SelectorKind } from './state.js';
 import AutocompletePopover from './components/AutocompletePopover.js';
 import Header from './components/Header.js';
 import StatusBar from './components/StatusBar.js';
@@ -322,6 +322,71 @@ export default function App({
       // Returns true if the command was handled
       const parts = input.slice(1).split(' ');
       const cmd = parts[0]?.toLowerCase();
+
+      // /skill:<name> [args] — send the skill's full SKILL.md content to the agent
+      if (cmd?.startsWith('skill:')) {
+        const cfg = agent.getConfig();
+        if (cfg.enableSkillCommands === false) {
+          addErrorLog('Skill commands are disabled (enableSkillCommands: false).');
+          return true;
+        }
+        const skillName = cmd.slice('skill:'.length);
+        const argsText = parts.slice(1).join(' ');
+        try {
+          const { loadSkills } = await import('@tiny-cli/resources');
+          const result = await loadSkills(
+            cfg.skillsOptions ?? { settingsSkills: [], cliSkills: [], noSkills: false, trusted: false }
+          );
+          const skill = result.skills.find((s) => s.name === skillName);
+          if (!skill) {
+            addErrorLog(`Unknown skill "${skillName}". Available: ${result.skills.map((s) => s.name).join(', ') || '(none)'}`);
+            return true;
+          }
+          const fs = await import('node:fs/promises');
+          const content = await fs.readFile(skill.path, 'utf-8');
+          agentApi.submitMessage(argsText ? `${content}\n\nUser: ${argsText}` : content);
+        } catch (err: any) {
+          addErrorLog(`Skill command failed: ${err.message}`);
+        }
+        return true;
+      }
+
+      // /skills — open a selector to activate/deactivate skills; active
+      // skill bodies are injected into the system prompt on every run.
+      if (cmd === 'skills') {
+        const cfg = agent.getConfig();
+        try {
+          const { loadSkills } = await import('@tiny-cli/resources');
+          const result = await loadSkills(
+            cfg.skillsOptions ?? { settingsSkills: [], cliSkills: [], noSkills: false, trusted: false }
+          );
+          if (result.skills.length === 0) {
+            addSystemLog('No skills loaded. Add skills under ~/.tiny-cli/agent/skills/ or .tiny-cli/skills/.');
+          } else {
+            const active = new Set(cfg.activeSkills ?? []);
+            dispatch({
+              type: 'OPEN_SELECTOR',
+              selector: {
+                kind: 'skill',
+                title: `Select Skill to activate/deactivate (active: ${active.size})`,
+                items: result.skills.map((s) => ({
+                  label: `${active.has(s.name) ? '●' : '○'} ${s.name === 'create-skill' ? 'skills-generator' : s.name}`,
+                  value: s.name,
+                  description:
+                    s.name === 'create-skill'
+                      ? 'built-in: scaffolds new skills (/create-skill)'
+                      : s.description.split('\n')[0].slice(0, 80),
+                })),
+                selectedIndex: 0,
+              },
+            });
+          }
+          for (const w of result.warnings) addSystemLog(`Skill warning: ${w.message}`);
+        } catch (err: any) {
+          addErrorLog(`Failed to list skills: ${err.message}`);
+        }
+        return true;
+      }
 
       switch (cmd) {
         case 'exit':
@@ -690,6 +755,54 @@ export default function App({
           return true;
         }
 
+        case 'create-skill': {
+          const args = parts.slice(1);
+          const useGlobal = args.includes('--global');
+          const useProject = args.includes('--project');
+          let skillName = '';
+          const rest: string[] = [];
+          for (let i = 0; i < args.length; i++) {
+            if (args[i] === '--name' && args[i + 1]) {
+              skillName = args[++i];
+            } else if (!args[i].startsWith('--')) {
+              rest.push(args[i]);
+            }
+          }
+          const description = rest.join(' ').trim();
+          if (!description) {
+            addErrorLog('Usage: /create-skill [--global|--project] [--name <n>] <description>');
+            return true;
+          }
+          if (!skillName) {
+            skillName = description
+              .toLowerCase()
+              .split(/\s+/)
+              .slice(0, 4)
+              .join('-')
+              .replace(/[^a-z0-9-]/g, '')
+              .replace(/-+/g, '-')
+              .replace(/^-|-$/g, '')
+              .slice(0, 64);
+          }
+          if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(skillName) || skillName.length > 64) {
+            addErrorLog(`Invalid skill name "${skillName}". Use lowercase a-z, 0-9 and single hyphens (1-64 chars).`);
+            return true;
+          }
+          const os = await import('node:os');
+          const path = await import('node:path');
+          const trusted = agent.getConfig().skillsOptions?.trusted ?? false;
+          const locationDir = useGlobal
+            ? path.join(os.homedir(), '.tiny-cli', 'agent', 'skills')
+            : useProject || trusted
+              ? path.join(process.cwd(), '.tiny-cli', 'skills')
+              : path.join(os.homedir(), '.tiny-cli', 'agent', 'skills');
+          agentApi.submitMessage(
+            `Use the create-skill skill to create a skill named "${skillName}" with description "${description}" in ${locationDir}.`
+          );
+          addSystemLog(`Asking the agent to scaffold skill "${skillName}" in ${locationDir}…`);
+          return true;
+        }
+
         default:
           addErrorLog(`Unknown command: /${cmd}`);
           return true;
@@ -945,6 +1058,43 @@ export default function App({
       ? `📬 ${state.messageQueue.length} queued message${state.messageQueue.length !== 1 ? 's' : ''}`
       : '';
 
+  // Handler for selector popover selections (model/mode/session/mcp)
+  const handleSelectorAccept = (kind: SelectorKind, value: string) => {
+    switch (kind) {
+      case 'model':
+        handleSlashCommand(`/model ${value}`);
+        break;
+      case 'mode':
+        handleSlashCommand(`/mode ${value}`);
+        break;
+      case 'session':
+        handleSlashCommand(`/session ${value}`);
+        break;
+      case 'mcp':
+        handleSlashCommand(`/mcp ${value}`);
+        break;
+      case 'skill': {
+        // Toggle the selected skill in config.activeSkills. The full body
+        // of every active skill is injected into the system prompt on each
+        // run (agent.ts), so this survives compaction and reloads.
+        const cfg = agent.getConfig();
+        const active = new Set(cfg.activeSkills ?? []);
+        if (active.has(value)) {
+          active.delete(value);
+          addSystemLog(`Skill deactivated: ${value}`);
+        } else {
+          active.add(value);
+          addSystemLog(`Skill activated: ${value} (injected into system prompt)`);
+        }
+        const updated = { ...cfg, activeSkills: [...active] };
+        agent.updateConfig(updated);
+        import('../config.js').then(({ saveConfig }) => saveConfig(updated)).catch(() => {});
+        break;
+      }
+    }
+    dispatch({ type: 'PATCH', patch: { pendingSelector: null } });
+  };
+
   return (
     <Box flexDirection="column" height={terminalRows}>
       {/* TOP: conversation pane — fixed height, scrollable, collapsible.
@@ -1043,8 +1193,10 @@ export default function App({
         <Box position="absolute" bottom={bottomBoxHeight + inputHeight + 1} left={2} width={terminalColumns - 4}>
           <AutocompletePopover
             items={state.pendingSelector.items}
-            selectedIndex={state.pendingSelector.selectedIndex}
             title={state.pendingSelector.title}
+            selectedIndex={state.pendingSelector.selectedIndex}
+            onSelect={(value) => handleSelectorAccept(state.pendingSelector!.kind, value)}
+            onDismiss={() => dispatch({ type: 'PATCH', patch: { pendingSelector: null } })}
           />
         </Box>
       ) : null}

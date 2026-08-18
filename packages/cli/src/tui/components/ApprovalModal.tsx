@@ -105,10 +105,26 @@ export default function ApprovalModal({
     } as LogEntry,
     columns,
   );
-  // A short, single-line arg preview (first line only, capped).
-  const argPreview = summary.detail
-    ? summary.detail.split('\n').filter((l) => l.trim())[0]?.slice(0, columns - 8) ?? ''
-    : '';
+  // Preview of the args (first non-empty lines, Ink-wrapped). The modal is
+  // anchored at the top and grows downward, so the preview budget is
+  // whatever rows remain after the fixed chrome (title, tool header,
+  // optional path, buttons, hint, 2 border rows, top offset).
+  const FIXED_ROWS = 8;
+  const top = 2;
+  const previewBudget = Math.max(0, rows - top - FIXED_ROWS);
+  const previewLines = summary.detail
+    ? summary.detail.split('\n').filter((l) => l.trim()).slice(0, previewBudget)
+    : [];
+  // The full target path (if any) on its own line — never truncated mid-word
+  // by the width budget; Ink wraps it instead.
+  let fullPath = '';
+  try {
+    const args = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+    if (typeof args.path === 'string') fullPath = args.path;
+    else if (typeof args.cmd === 'string') fullPath = args.cmd;
+  } catch {
+    // args not JSON — leave fullPath empty
+  }
 
   return (
     // Absolute overlay: taken out of the flex flow so it floats over the
@@ -117,9 +133,10 @@ export default function ApprovalModal({
       flexDirection="column"
       borderStyle="round"
       borderColor="yellow"
+      backgroundColor="black"
       paddingX={1}
       position="absolute"
-      top={Math.max(1, Math.floor((rows - 7) / 2))}
+      top={top}
       left={2}
       width={columns - 4}
     >
@@ -132,10 +149,20 @@ export default function ApprovalModal({
         <Text bold>{summary.header}</Text>
       </Box>
 
-      {argPreview ? (
+      {previewLines.length > 0 ? (
+        <Box flexDirection="column" marginLeft={2}>
+          {previewLines.map((line, i) => (
+            <Text key={i} dimColor color="gray" wrap="wrap">
+              {line}
+            </Text>
+          ))}
+        </Box>
+      ) : null}
+
+      {fullPath ? (
         <Box marginLeft={2}>
-          <Text dimColor color="gray" wrap="truncate">
-            {argPreview}
+          <Text color="gray" wrap="wrap">
+            {fullPath}
           </Text>
         </Box>
       ) : null}

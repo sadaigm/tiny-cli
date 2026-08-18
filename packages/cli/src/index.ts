@@ -7,6 +7,16 @@ import chalk from 'chalk';
 
 const program = new Command();
 
+/** Merge --skill/--no-skills flags into the agent's skillsOptions. */
+function applySkillFlags(config: import('@tiny-cli/core').AgentConfig, options: any): void {
+  config.skillsOptions = {
+    settingsSkills: config.skillsOptions?.settingsSkills ?? [],
+    cliSkills: options.skill ?? [],
+    noSkills: options.noSkills === true,
+    trusted: config.skillsOptions?.trusted ?? false,
+  };
+}
+
 program
   .name('tiny-cli')
   .description('A workflow-driven CLI agent powered by small local models')
@@ -14,6 +24,8 @@ program
   .option('-r, --resume <id>', 'Resume a specific session by ID')
   .option('-q, --query <text>', 'Explicitly pass a query to execute and exit')
   .option('-m, --mode <type>', 'Execution mode (agent, plan)', 'agent')
+  .option('--skill <path>', 'Load an agent skill (file or containing dir); repeatable', (v: string, prev: string[]) => [...prev, v], [] as string[])
+  .option('--no-skills', 'Disable skill discovery (explicit --skill paths still load)')
   .argument('[query...]', 'The question or task for the agent')
   .addHelpText('after', `
 Examples:
@@ -30,6 +42,7 @@ Examples:
       logDebug(`No query provided, starting TUI... stdin.isTTY: ${process.stdin.isTTY}`);
       // No query provided, start the interactive Ink TUI
       const config = await loadConfig();
+      applySkillFlags(config, options);
 
       const agent = new Agent(config);
       await agent.init();
@@ -62,6 +75,7 @@ Examples:
     } else {
       // Single task execution
       const config = await loadConfig();
+      applySkillFlags(config, options);
 
       // Enforce auto for headless by default if notify is set
       if (!config.permissionMode || config.permissionMode === 'notify') {

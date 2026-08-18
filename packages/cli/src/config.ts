@@ -33,6 +33,10 @@ interface AgentProfile {
     insecure?: boolean;
   };
   mcpServers?: McpServerConfig[];
+  /** Extra skill files/directories to load (agents.json "skills" array). */
+  skills?: string[];
+  /** Whether /skill:<name> TUI commands are enabled. Defaults to true. */
+  enableSkillCommands?: boolean;
 }
 
 export async function loadConfig(): Promise<AgentConfig> {
@@ -93,7 +97,14 @@ export async function loadConfig(): Promise<AgentConfig> {
           logLevel: profile.logLevel,
           maxIterations: profile.maxIterations,
           compactionThresholdTokens: profile.compactionThresholdTokens,
-          compactionRetainTokens: profile.compactionRetainTokens
+          compactionRetainTokens: profile.compactionRetainTokens,
+          skillsOptions: {
+            settingsSkills: profile.skills ?? [],
+            cliSkills: [],
+            noSkills: false,
+            trusted: await isProjectTrusted()
+          },
+          enableSkillCommands: profile.enableSkillCommands !== false
         };
 
         // Merge global settings (like lastSessionId)
@@ -123,6 +134,19 @@ async function tryReadFile(filePath: string): Promise<string | null> {
     return await fs.readFile(filePath, 'utf-8');
   } catch {
     return null;
+  }
+}
+
+/**
+ * No dedicated trust mechanism exists yet; a project that already carries a
+ * local `.tiny-cli/agents.json` is treated as trusted for project-skill loading.
+ */
+async function isProjectTrusted(): Promise<boolean> {
+  try {
+    await fs.access(PROJECT_CONFIG_FILE);
+    return true;
+  } catch {
+    return false;
   }
 }
 

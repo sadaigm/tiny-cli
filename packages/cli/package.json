@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@tiny-cli/core": "workspace:*",
+    "@tiny-cli/resources": "workspace:*",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "fuzzy": "^0.1.3",
