@@ -344,6 +344,7 @@ export function useAgent({
         if (liveReasoningId !== null && !reasoningCollapsed) {
           reasoningCollapsed = true;
           setLogLive?.(liveReasoningId, false);
+          liveReasoningId = null; // Clear immediately to prevent double-collapse
         }
       };
 
@@ -354,7 +355,6 @@ export function useAgent({
             // Tool execution begins — the thinking phase is over, collapse
             // the live reasoning entry.
             collapseReasoning();
-            liveReasoningId = null;
             addLog({
               type: 'tool_call',
               content: step.toolCall.function.name,
@@ -420,7 +420,6 @@ export function useAgent({
           if (!appendLogText || !reserveLogId) return;
           if (liveReasoningId !== null) {
             collapseReasoning();
-            liveReasoningId = null;
           }
           if (liveEntryId === null) {
             liveEntryId = reserveLogId();

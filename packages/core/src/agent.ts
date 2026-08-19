@@ -16,6 +16,27 @@ import { getEncoding, type Tiktoken } from "js-tiktoken";
 import fs from "fs/promises";
 import path from "path";
 import { McpManager } from "./mcp/manager.js";
+
+// Helper functions for memory relevance filtering
+function filterRelevantMemories(userInput: string, memories: Array<{type: string, description: string, content: string}>): Array<{type: string, description: string, content: string}> {
+  const keywords = extractKeywords(userInput.toLowerCase());
+
+  return memories.filter(m => {
+    // Always include user preferences (small, high-value)
+    if (m.type === 'user') return true;
+
+    // Keyword match for other types
+    const memoryText = (m.description + ' ' + m.content).toLowerCase();
+    return keywords.some(k => memoryText.includes(k));
+  });
+}
+
+// Simple keyword extraction (v1)
+function extractKeywords(text: string): string[] {
+  const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'this', 'that', 'is', 'are', 'was', 'were']);
+  const words = text.split(/\W+/).filter(w => w.length > 3 && !stopWords.has(w));
+  return [...new Set(words)];
+}
 import {
   MutationGate,
   MutexMap,
@@ -169,6 +190,69 @@ GUIDANCE FOR PLAN EXECUTION:
       } catch (e) {
         // No plan found, ignore
       }
+    }
+
+    // Inject project instructions (CLAUDE.md / AGENTS.md) if present
+    const { loadInstructions } = await import('./instructions.js');
+    const instructions = await loadInstructions(process.cwd());
+    if (instructions.length > 0) {
+      const blocks = instructions.map(
+        (b) => `<project_instructions source="${b.source}">\n${b.content}\n</project_instructions>`
+      );
+      systemPrompt += `\n\n${blocks.join('\n')}`;
+    }
+
+    // Inject project memory if present (with relevance filtering to control token cost)
+    const memoryIndexPath = path.join(process.cwd(), '.tiny-cli/memory/MEMORY.md');
+    try {
+      const indexContent = await fs.readFile(memoryIndexPath, 'utf-8');
+      const memoryLines = indexContent.split('\n').filter(line => line.startsWith('- ['));
+
+      if (memoryLines.length > 0) {
+        // Load all memories first
+        const allMemories: Array<{name: string, description: string, type: string, content: string}> = [];
+        for (const line of memoryLines) {
+          const match = line.match(/\]\(([^)]+)\)/);
+          if (match) {
+            const memoryFile = path.join(process.cwd(), '.tiny-cli/memory', match[1]);
+            try {
+              const memoryContent = await fs.readFile(memoryFile, 'utf-8');
+
+              // Parse frontmatter to get type and description
+              const frontmatterMatch = memoryContent.match(/^---\nname: (.+)\ndescription: (.+)\nmetadata:\n  type: (.+)\n---\n/);
+              if (frontmatterMatch) {
+                allMemories.push({
+                  name: frontmatterMatch[1],
+                  description: frontmatterMatch[2],
+                  type: frontmatterMatch[3],
+                  content: memoryContent
+                });
+              }
+            } catch {
+              // Individual file unreadable — skip silently
+            }
+          }
+        }
+
+        // Filter by relevance (keyword matching + type priority)
+        const relevantMemories = filterRelevantMemories(userInput, allMemories);
+
+        // Apply size limit (fallback to prevent bloat)
+        const MAX_MEMORY_CHARS = 10_000;
+        let memoryContent = relevantMemories.map(m => m.content).join('\n---\n');
+
+        if (memoryContent.length > MAX_MEMORY_CHARS) {
+          // Keep newest within limit
+          const truncated = memoryContent.slice(-MAX_MEMORY_CHARS);
+          memoryContent = `\n[...some relevant memories truncated to fit limit...]\n${truncated}`;
+        }
+
+        if (memoryContent) {
+          systemPrompt += `\n\n<project_memory>\n${memoryContent}\n</project_memory>`;
+        }
+      }
+    } catch {
+      // No memory directory — ignore silently
     }
 
     this.messages.unshift({ role: "system", content: systemPrompt });
