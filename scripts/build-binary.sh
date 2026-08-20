@@ -42,8 +42,9 @@ echo "==> Building $TARGET (version $VERSION)"
 rm -rf "$OUTDIR"
 mkdir -p "$OUTDIR"
 
-# Resolve workspace deps so the bundler can follow them
+# Resolve workspace deps and build packages (bun needs core/resources dist/ to resolve them)
 (cd "$ROOT" && pnpm install --frozen-lockfile >/dev/null 2>&1 || pnpm install >/dev/null)
+(cd "$ROOT" && pnpm build)
 
 (cd "$ROOT" && bun build packages/cli/src/index.ts \
   --compile --minify \
