@@ -203,6 +203,32 @@ To prevent "hallucination" and performance degradation in long sessions, `tiny-c
 
 ## 🛠 Installation
 
+### Native installer (recommended — no Node.js required)
+
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sadaigm/tiny-cli/main/scripts/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/sadaigm/tiny-cli/main/scripts/install.ps1 | iex
+```
+
+Installs a self-contained binary to `~/.tiny-cli` (Windows: `%USERPROFILE%\.tiny-cli`) and puts `tiny-cli` on your PATH.
+
+### npm
+
+```bash
+npm install -g tiny-cli
+```
+
+Requires Node.js ≥ 20.
+
+### From source
+
 ```bash
 # Clone the repository
 git clone https://github.com/sadaigm/tiny-cli.git

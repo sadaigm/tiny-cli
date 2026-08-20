@@ -1,6 +1,7 @@
 {
   "name": "tiny-cli",
   "version": "1.0.0",
+  "private": true,
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -19,5 +20,8 @@
     "ts-node": "^10.9.2",
     "turbo": "^2.8.20",
     "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "react-devtools-core": "^7.0.1"
   }
 }

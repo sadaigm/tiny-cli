@@ -19,6 +19,11 @@ function bundledSkillsDir(): string {
   return path.resolve(here, "..", "skills");
 }
 
+/** Skills dir for the native binary install layout: ~/.tiny-cli/bin/tiny-cli + ~/.tiny-cli/skills/ */
+function binarySkillsDir(): string {
+  return path.resolve(path.dirname(process.execPath), "..", "skills");
+}
+
 function homeDir(): string {
   return process.env.HOME || os.homedir();
 }
@@ -108,7 +113,11 @@ async function collectCandidates(opts: LoadSkillsOptions): Promise<Candidate[]> 
 
   // Built-in bundled skills — listed before user locations but lowest priority
   // on collision, so users can override them (e.g. their own create-skill).
-  const bundled = await findSkillMds(bundledSkillsDir()).catch(() => [] as string[]);
+  let bundled = await findSkillMds(bundledSkillsDir()).catch(() => [] as string[]);
+  // Native binary install: skills live next to the binary's dir, not in a package
+  if (bundled.length === 0) {
+    bundled = await findSkillMds(binarySkillsDir()).catch(() => [] as string[]);
+  }
   for (const file of bundled) candidates.push({ file, source: "package" });
 
   // 6. cliSkills — always loaded, even when noSkills is true (file or containing dir)

@@ -16,3 +16,4 @@ logs
 scratch
 testfolder
 workspace
+dist-bin/

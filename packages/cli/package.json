@@ -2,7 +2,20 @@
   "name": "tiny-cli",
   "version": "1.0.0",
   "type": "module",
+  "description": "A lightweight agentic AI coding assistant for any OpenAI-compatible API",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sadaigm/tiny-cli.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
+    "tiny": "./dist/index.js",
     "tiny-cli": "./dist/index.js"
   },
   "main": "./dist/index.js",
@@ -22,7 +35,8 @@
     "ink": "^7.1.1",
     "ink-spinner": "^5.0.0",
     "node-fetch": "^3.3.2",
-    "react": "^19.1.0"
+    "react": "^19.1.0",
+    "react-devtools-core": "^7.0.1"
   },
   "devDependencies": {
     "@types/node": "^20.14.12",

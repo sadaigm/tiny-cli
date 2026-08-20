@@ -18,7 +18,7 @@ function applySkillFlags(config: import('@tiny-cli/core').AgentConfig, options: 
 }
 
 program
-  .name('tiny-cli')
+  .name('tiny')
   .description('A workflow-driven CLI agent powered by small local models')
   .version('1.0.0')
   .option('-r, --resume <id>', 'Resume a specific session by ID')
@@ -29,10 +29,12 @@ program
   .argument('[query...]', 'The question or task for the agent')
   .addHelpText('after', `
 Examples:
-  $ tiny-cli                                     # Starts the interactive TUI
-  $ tiny-cli --mode plan                         # Starts the TUI in plan mode
-  $ tiny-cli "build a web app"                   # Headless execution in agent mode
-  $ tiny-cli -q "draft an architecture" -m plan  # Headless execution in plan mode
+  $ tiny                                         # Starts the interactive TUI
+  $ tiny --mode plan                             # Starts the TUI in plan mode
+  $ tiny "build a web app"                       # Headless execution in agent mode
+  $ tiny -q "draft an architecture" -m plan      # Headless execution in plan mode
+
+  ($ tiny-cli works everywhere as an alias)
 `)
   .action(async (queryParts, options) => {
     const positionalQuery = queryParts.join(' ');
