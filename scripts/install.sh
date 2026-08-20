@@ -52,14 +52,20 @@ if [ -n "$LOCAL_TARBALL" ]; then
 else
   command -v grep >/dev/null 2>&1 || die "grep is required but not found"
   say "Resolving latest release"
-  TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"\(v[0-9][^"]*\)"$/\1/')"
+  # /releases/latest excludes prereleases; fall back to the newest release incl. prereleases
+  RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" \
+    || RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=1")"
+  TAG="$(printf '%s' "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed 's/.*"\(v[0-9][^"]*\)"$/\1/')"
   [ -n "$TAG" ] || die "could not resolve latest release (network or rate limit?)"
-  VERSION="${TAG#v}"
-  URL="https://github.com/$REPO/releases/download/$TAG/tiny-cli-$VERSION-$TARGET.tar.gz"
+  # Pick the asset for this target by suffix — version comes from the asset name,
+  # so tag and package.json versions don't have to match
+  URL="$(printf '%s' "$RELEASE_JSON" \
+    | grep -o '"browser_download_url": *"[^"]*"' | cut -d'"' -f4 \
+    | grep -e "-$TARGET\.tar\.gz$" | head -1)"
+  [ -n "$URL" ] || die "no $TARGET asset found on release $TAG"
   say "Downloading $URL"
   curl -fSL --progress-bar -o "$TMPDIR_INSTALL/tiny-cli.tar.gz" "$URL" \
-    || die "download failed (does a $TARGET build exist for $TAG?)"
+    || die "download failed"
 fi
 
 # --- Extract & install -----------------------------------------------------

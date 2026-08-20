@@ -1,0 +1,28 @@
+# Test image: verifies the public install.sh flow in a clean, Node-less Linux container.
+# Build:  docker build -f Dockerfile.test -t tiny-cli-install-test .
+# Run:    docker run --rm tiny-cli-install-test
+#
+# BRANCH defaults to main (the documented public URL); override while the
+# scripts live on a feature branch:
+#   docker build -f Dockerfile.test --build-arg BRANCH=feature/native-installer -t tiny-cli-install-test .
+
+FROM debian:bookworm-slim
+
+ARG BRANCH=main
+
+# install.sh needs: curl, tar, grep, a shell — all present except curl + certs
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Sanity: this image must NOT contain Node — the installer is supposed to work without it
+RUN ! command -v node && ! command -v npm && ! command -v bun
+
+# Run the exact public install command
+RUN curl -fsSL "https://raw.githubusercontent.com/sadaigm/tiny-cli/${BRANCH}/scripts/install.sh" | sh
+
+# Verify on a fresh layer: binary on PATH and runs
+ENV PATH="/usr/local/bin:${PATH}"
+RUN tiny --version && tiny-cli --version && tiny --help > /dev/null
+
+CMD ["tiny", "--version"]
