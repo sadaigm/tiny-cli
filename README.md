@@ -203,6 +203,9 @@ To prevent "hallucination" and performance degradation in long sessions, `tiny-c
 
 ## 🛠 Installation
 
+> See **[INSTALL.md](INSTALL.md)** for the full guide — upgrades, uninstall,
+> specific versions, and troubleshooting.
+
 ### Native installer (recommended — no Node.js required)
 
 macOS / Linux:
