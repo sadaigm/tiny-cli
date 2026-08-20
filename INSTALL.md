@@ -17,7 +17,7 @@ no Node.js needed) and npm. After installation you can use both `tiny` and
 Open a terminal and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sadaigm/tiny-cli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sadaigm/tiny-cli/feature/native-installer/scripts/install.sh | sh
 ```
 
 ### Windows (PowerShell)
@@ -25,7 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/sadaigm/tiny-cli/main/scripts/insta
 Open PowerShell and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/sadaigm/tiny-cli/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/sadaigm/tiny-cli/feature/native-installer/scripts/install.ps1 | iex
 ```
 
 Then open a **new terminal** and run:
