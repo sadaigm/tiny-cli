@@ -133,7 +133,7 @@ function renderToolSummary(
  * Splits on {@link splitLinks} and wraps link segments in Ink's
  * `underline` style; plain segments keep the body colour.
  */
-function renderBodyWithLinks(body: string, bodyColor: string | undefined): React.ReactElement {
+export function renderBodyWithLinks(body: string, bodyColor: string | undefined): React.ReactElement {
   const segments = splitLinks(body);
   if (!segments.some((s) => s.link)) {
     return <Text color={bodyColor}>{body}</Text>;

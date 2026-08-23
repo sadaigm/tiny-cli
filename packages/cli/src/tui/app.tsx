@@ -10,7 +10,9 @@ import StatusBar from './components/StatusBar.js';
 import MessageLog, { type MessageLogHandle } from './components/MessageLog.js';
 import StdinMouseBridge from './components/StdinMouseBridge.js';
 import Spinner from './components/Spinner.js';
-import InputBox from './components/InputBox.js';
+import { StreamProvider } from './components/StreamProvider.js';
+import { StreamStore } from './streamStore.js';
+import InputBox, { MENTION_POPOVER_ROWS } from './components/InputBox.js';
 import ApprovalModal from './components/ApprovalModal.js';
 import RecoveryModal from './components/RecoveryModal.js';
 
@@ -96,13 +98,11 @@ declare module './state.js' {
 type Action =
   | { type: 'PATCH'; patch: Partial<TuiState> }
   | { type: 'ADD_LOG'; entry: NewLogEntry }
-  | { type: 'APPEND_LOG_TEXT'; id: string; delta: string }
   | { type: 'SET_MODE'; mode: TuiMode }
   | { type: 'CLEAR_LOG' }
   | { type: 'SET_PERMISSION_MODE'; mode: 'notify' | 'auto-edit' | 'auto' }
   | { type: 'SET_CONFIG'; config: AgentConfig }
   | { type: 'SET_SESSION_ID'; sessionId: string }
-  | { type: 'SET_LOG_LIVE'; id: string; live: boolean }
   | { type: 'OPEN_SELECTOR'; selector: PendingSelector }
   | { type: 'CLOSE_SELECTOR' }
   | { type: 'MOVE_SELECTOR'; direction: 'up' | 'down' };
@@ -128,25 +128,6 @@ function reducer(state: TuiState, action: Action): TuiState {
         live: action.entry.live,
       };
       return { ...state, log: [...state.log, entry] };
-    }
-
-    case 'APPEND_LOG_TEXT': {
-      // Streaming: append a text delta to one existing entry (the live
-      // assistant message). Mutating a copy keeps the array identity
-      // changing so memoized panes re-render only for this entry.
-      const idx = state.log.findIndex((e) => e.id === action.id);
-      if (idx === -1) return state;
-      const log = [...state.log];
-      log[idx] = { ...log[idx], content: log[idx].content + action.delta };
-      return { ...state, log };
-    }
-
-    case 'SET_LOG_LIVE': {
-      const idx = state.log.findIndex((e) => e.id === action.id);
-      if (idx === -1 || state.log[idx].live === action.live) return state;
-      const log = [...state.log];
-      log[idx] = { ...log[idx], live: action.live };
-      return { ...state, log };
     }
 
     case 'SET_MODE':
@@ -277,18 +258,20 @@ export default function App({
     dispatch({ type: 'ADD_LOG', entry });
   }, []);
 
-  // Streaming support: append a delta to one entry by id, and reserve the
-  // id a future ADD_LOG will use (so the live assistant entry exists
-  // before its first delta arrives). Both feed the same reducer.
-  const appendLogText = useCallback((id: string, delta: string) => {
-    dispatch({ type: 'APPEND_LOG_TEXT', id, delta });
-  }, []);
-
-  const reserveLogId = useCallback((): string => `log-${++logIdCounter}`, []);
-
-  const setLogLive = useCallback((id: string, live: boolean) => {
-    dispatch({ type: 'SET_LOG_LIVE', id, live });
-  }, []);
+  // ── Streaming store ──
+  // Live thinking/response deltas and spinner-text changes live in this
+  // external store (inside the log-pane subtree), so a delta never
+  // re-renders the whole App. When a phase ends, the store hands the full
+  // text back here — one ADD_LOG commit per phase.
+  const [streamStore] = React.useState(() => new StreamStore());
+  React.useEffect(() => {
+    streamStore.onCommit = (type: 'reasoning' | 'assistant', text: string) => {
+      addLog({ type, content: text });
+    };
+    return () => {
+      streamStore.onCommit = null;
+    };
+  }, [streamStore, addLog]);
 
   const addSystemLog = useCallback((content: string) => {
     dispatch({ type: 'ADD_LOG', entry: { type: 'system', content } });
@@ -310,10 +293,8 @@ export default function App({
     sessionId: state._sessionId ?? sessionId,
     setState: setStateForAgent,
     addLog,
-    appendLogText,
-    reserveLogId,
-    setLogLive,
     getMode: () => stateRef.current.mode,
+    streamStore,
   });
 
   // ── Slash command handling ──
@@ -1046,17 +1027,18 @@ export default function App({
   //   = top conversation box (its border + a 1-line status strip + the log)
   const bottomBoxHeight = 5;
   const inputHeight = 1;
-  const topBoxHeight = Math.max(8, terminalRows - inputHeight - bottomBoxHeight);
+  // While the @file-mention (or /command) picker is open, the popover block
+  // adds MENTION_POPOVER_ROWS rows below the input row. The root column is
+  // height=terminalRows, so the conversation pane must shrink by the same
+  // amount or Yoga clips interior rows of the overflowing column (missing
+  // popover rows / garbled list).
+  const popoverRows = mentionActive ? MENTION_POPOVER_ROWS : 0;
+  const topBoxHeight = Math.max(8, terminalRows - inputHeight - bottomBoxHeight - popoverRows);
   // Inside the top box: border (2) + reserved status strip (1) = 3 chrome rows.
   const paneMaxHeight = Math.max(4, topBoxHeight - 3);
 
-  // Status strip content (queue / spinner / blank) — always 1 line so its
-  // presence never reflows the message log above it.
-  const statusLine = state.agentState === 'running' && state.spinnerText
-    ? state.spinnerText
-    : state.messageQueue.length > 0
-      ? `📬 ${state.messageQueue.length} queued message${state.messageQueue.length !== 1 ? 's' : ''}`
-      : '';
+  // Status strip content now lives inside MessageLog (SpinnerStrip),
+  // driven by the streaming store — text changes there don't re-render App.
 
   // Handler for selector popover selections (model/mode/session/mcp)
   const handleSelectorAccept = (kind: SelectorKind, value: string) => {
@@ -1096,6 +1078,7 @@ export default function App({
   };
 
   return (
+    <StreamProvider store={streamStore}>
     <Box flexDirection="column" height={terminalRows}>
       {/* TOP: conversation pane — fixed height, scrollable, collapsible.
           Border stays themed and quiet; only alarms (pending modal,
@@ -1118,20 +1101,9 @@ export default function App({
           browseMode={browseMode}
           onBrowseModeChange={setBrowseMode}
           agentRunning={state.agentState === 'running' || state.agentState === 'awaiting_approval'}
+          queuedCount={state.messageQueue.length}
         />
-        {/* Reserved 1-line status strip — constant height, no reflow. */}
-        <Box height={1}>
-          {state.agentState === 'running' && state.spinnerText ? (
-            <Spinner text={statusLine} />
-          ) : statusLine ? (
-            <Text dimColor color={theme.warning}>
-              {' '}
-              {statusLine}
-            </Text>
-          ) : (
-            <Text> </Text>
-          )}
-        </Box>
+
       </Box>
 
       {/* MIDDLE: input box — always mounted; unmounting would tear down
@@ -1155,6 +1127,7 @@ export default function App({
           onMentionActiveChange={setMentionActive}
           onSearchActiveChange={setSearchActive}
           focus={!browseMode && !state.pendingApproval && !state.pendingRecovery && !state.pendingSelector}
+          dispatch={dispatch}
         />
       </Box>
 
@@ -1207,5 +1180,6 @@ export default function App({
         onWheel={(d) => paneRef.current?.wheel(d)}
       />
     </Box>
+    </StreamProvider>
   );
 }

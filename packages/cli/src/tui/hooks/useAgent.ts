@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
 import type { Agent, AgentStep, SessionManager, ToolCall } from '@tiny-cli/core';
 import { logError } from '@tiny-cli/core';
+import type { StreamStore } from '../streamStore.js';
 import type {
   TuiMode,
   LogEntry,
@@ -31,8 +32,6 @@ import {
  * have tabbed away.
  */
 const BELL_MIN_TURN_MS = 10_000;
-/** Live reasoning streams expanded up to this many lines, then auto-collapses. */
-const MAX_LIVE_REASONING_LINES = 3;
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -124,22 +123,11 @@ export interface UseAgentProps {
   /** Returns the current execution mode at call-time. */
   getMode: GetModeFn;
   /**
-   * Append a text delta to an existing log entry — used to stream the
-   * live assistant message as `run()`'s `onText` deltas arrive. Optional;
-   * without it, the final text still lands as one entry after the turn.
+   * External store for live streaming content. Thinking/response deltas
+   * are concatenated here (re-rendering only the small subscribed
+   * panels), and committed back via addLog once when each phase ends.
    */
-  appendLogText?: (id: string, delta: string) => void;
-  /**
-   * Pre-assign the id for the next log entry, so a streaming assistant
-   * entry can be created empty and appended to by id. Returns the id the
-   * ADD_LOG reducer will use. Optional (no streaming without it).
-   */
-  reserveLogId?: () => string;
-  /**
-   * Flip an existing log entry's `live` flag (used to collapse the live
-   * reasoning entry once the turn moves past the thinking phase).
-   */
-  setLogLive?: (id: string, live: boolean) => void;
+  streamStore: StreamStore;
 }
 
 /**
@@ -218,9 +206,7 @@ export function useAgent({
   setState,
   addLog,
   getMode,
-  appendLogText,
-  reserveLogId,
-  setLogLive,
+  streamStore,
 }: UseAgentProps): UseAgentApi {
   // ── Refs (persist across renders without triggering re-render) ──
 
@@ -329,32 +315,22 @@ export function useAgent({
       abortRef.current = abortController;
       const mode = planExecutingRef.current ? 'agent' : getMode();
 
-      setState({
-        agentState: 'running',
-        spinnerText: spinnerPrefix ? `${spinnerPrefix}…` : 'Thinking…',
-      });
-
-      // Shared with onReasoning below: the id of the live reasoning entry
-      // for this turn, so onStep and the turn-end/error paths can collapse
-      // it once the thinking phase is over (or it exceeds the line budget).
-      let liveReasoningId: string | null = null;
-      let reasoningCollapsed = false;
-      let reasoningBuf = '';
-      const collapseReasoning = (): void => {
-        if (liveReasoningId !== null && !reasoningCollapsed) {
-          reasoningCollapsed = true;
-          setLogLive?.(liveReasoningId, false);
-          liveReasoningId = null; // Clear immediately to prevent double-collapse
-        }
+      setState({ agentState: 'running' });
+      streamStore.setSpinner(true, spinnerPrefix ? `${spinnerPrefix}…` : 'Thinking…');
+      // Finish the live phases cleanly: the accumulated thinking/response
+      // text is committed to the log (once) and the panels stop rendering.
+      const finishStreaming = (): void => {
+        streamStore.commitThinking();
+        streamStore.commitResponse();
       };
 
       try {
         // onStep — stream tool calls / results to the log immediately
         const onStep = (step: AgentStep): void => {
           if (step.toolCall) {
-            // Tool execution begins — the thinking phase is over, collapse
-            // the live reasoning entry.
-            collapseReasoning();
+            // Tool execution begins — the streaming phases are over:
+            // commit them so the log order stays thinking → text → tool.
+            finishStreaming();
             addLog({
               type: 'tool_call',
               content: step.toolCall.function.name,
@@ -373,7 +349,7 @@ export function useAgent({
               });
             }
 
-            setState({ spinnerText: spinnerPrefix ? `${spinnerPrefix}…` : 'Working…' });
+            streamStore.setSpinner(true, spinnerPrefix ? `${spinnerPrefix}…` : 'Working…');
           }
         };
 
@@ -406,46 +382,24 @@ export function useAgent({
           return false;
         };
 
-        // onText — stream assistant text into a live log entry. The entry
-        // is created lazily on the first delta (empty assistant message),
-        // then grown via appendLogText. If streaming isn't available (no
-        // callback wired, or the stream fell back to buffered), the final
-        // response below still lands as a normal entry.
-        let liveEntryId: string | null = null;
+        // onText — stream assistant text into the live response panel.
+        // If streaming isn't available (no callback wired, or the stream
+        // fell back to buffered), the final response below still lands as
+        // a normal entry.
         let streamedAnything = false;
-        // Live reasoning entry: `live` keeps it expanded while it streams;
-        // the flag is cleared as soon as the turn moves past the thinking
-        // phase (first text delta or tool call) so it collapses in place.
         const onText = (delta: string): void => {
-          if (!appendLogText || !reserveLogId) return;
-          if (liveReasoningId !== null) {
-            collapseReasoning();
-          }
-          if (liveEntryId === null) {
-            liveEntryId = reserveLogId();
-            addLog({ type: 'assistant', content: '', _id: liveEntryId } as NewLogEntry);
-          }
+          // First text delta — the thinking phase is over: commit it as a
+          // collapsed reasoning entry so it stays above the response.
+          streamStore.commitThinking();
           streamedAnything = true;
-          appendLogText(liveEntryId, delta);
+          streamStore.appendResponse(delta);
         };
 
-        // onReasoning — stream the model's thinking into its own dimmed
-        // live entry, separate from the assistant text entry.
+        // onReasoning — stream the model's thinking into the live thinking
+        // panel, separate from the assistant text. Concatenation happens in
+        // the store; only that panel re-renders per delta.
         const onReasoning = (delta: string): void => {
-          if (!appendLogText || !reserveLogId) return;
-          if (liveReasoningId === null) {
-            liveReasoningId = reserveLogId();
-            reasoningBuf = '';
-            addLog({ type: 'reasoning', content: '', _id: liveReasoningId, live: true } as NewLogEntry);
-          }
-          appendLogText(liveReasoningId, delta);
-          // Auto-collapse once the thinking exceeds the line budget — a
-          // long reasoning stream shouldn't flood the pane while it runs.
-          reasoningBuf += delta;
-          if (reasoningBuf.split('\n').length > MAX_LIVE_REASONING_LINES) {
-            collapseReasoning();
-          }
-          setState({ spinnerText: 'Thinking…' });
+          streamStore.appendThinking(delta);
         };
 
         const response = await agent.run(
@@ -477,10 +431,10 @@ export function useAgent({
         // Persist session history
         await saveSession();
 
-        // Safety net: agent.run can return early (abort, timeout) without
-        // firing onStep/onText — make sure the reasoning entry is collapsed.
-        collapseReasoning();
-        liveReasoningId = null;
+        // Commit the streamed response as a normal assistant entry (the
+        // fallback blob above was skipped when the stream produced it).
+        finishStreaming();
+        streamStore.setSpinner(false, '');
 
         // ── Queue drain ──────────────────────────────────────────
         const nextMessage = queueRef.current.dequeue();
@@ -509,7 +463,8 @@ export function useAgent({
           }
         }
       } catch (err: unknown) {
-        collapseReasoning();
+        finishStreaming();
+        streamStore.setSpinner(false, '');
         const message = err instanceof Error ? err.message : String(err);
         logError(`agent turn failed: ${message}\n${err instanceof Error ? err.stack ?? '' : ''}`);
         addLog({
@@ -524,7 +479,7 @@ export function useAgent({
         });
       }
     },
-    [agent, setState, addLog, getMode, showApprovalModal, saveSession, sessionManager, sessionId],
+    [agent, setState, addLog, getMode, streamStore, showApprovalModal, saveSession, sessionManager, sessionId],
   );
 
   // ── Public API ──────────────────────────────────────────────────

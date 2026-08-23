@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
   forwardRef,
+  useSyncExternalStore,
 } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import type { LogEntry } from '../state.js';
@@ -14,6 +15,11 @@ import MessageItem, { MAX_STANDARD_BODY_LINES } from './MessageItem.js';
 import { summarizeToolCall, summarizeToolResult } from '../utils/toolSummary.js';
 import { copyToClipboard, entryClipboardText } from '../utils/clipboard.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
+import { useStreamStore } from './StreamProvider.js';
+import ThinkingPanel from './ThinkingPanel.js';
+import ResponsePanel from './ResponsePanel.js';
+import Spinner from './Spinner.js';
+import { getTheme } from '../theme.js';
 
 /**
  * Imperative handle exposed by {@link MessageLog} so the mouse bridge and
@@ -53,6 +59,8 @@ export interface MessageLogProps {
    * stream in full; when it flips to false they collapse to one line each.
    */
   agentRunning?: boolean;
+  /** Number of queued messages, shown on the in-pane status strip. */
+  queuedCount?: number;
 }
 
 /** Clamp a value into the inclusive range [min, max]. */
@@ -83,7 +91,7 @@ type LogViewAction =
   | { type: 'SCROLL_LINE'; offset: number }
   | { type: 'TOGGLE_EXPAND'; id: string }
   | { type: 'RECONCILE'; length: number }
-  | { type: 'RUNNING_CHANGE'; running: boolean };
+  | { type: 'RUNNING_CHANGE'; running: boolean; entries?: LogEntry[] };
 
 function createLogView(length: number): LogView {
   return { focusIndex: length > 0 ? length - 1 : 0, expanded: new Set(), autoFollow: true, lineOffset: 0 };
@@ -129,9 +137,18 @@ function logViewReducer(state: LogView, action: LogViewAction): LogView {
     case 'RUNNING_CHANGE': {
       // When the agent turn ends, reasoning entries that streamed live
       // collapse into one-line sections (expandable via Tab). Manual
-      // expands the user made are preserved across the transition.
+      // expands for other entry types (assistant, tool_call, etc.) are preserved.
       if (action.running) return state;
-      return { ...state, expanded: new Set() };
+      // Only remove reasoning entry IDs from the expanded set
+      const expanded = new Set(state.expanded);
+      if (action.entries) {
+        action.entries.forEach((entry) => {
+          if (entry.type === 'reasoning') {
+            expanded.delete(entry.id);
+          }
+        });
+      }
+      return { ...state, expanded };
     }
     default:
       return state;
@@ -332,7 +349,7 @@ const isEnd = (input: string): boolean =>
  * ```
  */
 const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function MessageLog(
-  { entries, maxHeight, active = false, browseMode = false, onBrowseModeChange, agentRunning = false },
+  { entries, maxHeight, active = false, browseMode = false, onBrowseModeChange, agentRunning = false, queuedCount = 0 },
   ref,
 ): React.ReactElement {
   const { stdout } = useStdout();
@@ -342,8 +359,9 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   const terminalColumns = stdout?.columns ?? 80;
   // `maxHeight` is the interior height of the bordered parent Box. The
   // border itself is drawn by the parent, so no further subtraction here.
-  // Reserve 1 row for the `↑ N above · ↓ M below` header.
-  const paneHeight = Math.max(4, (maxHeight ?? terminalRows) - 1);
+  // Reserve 1 row for the `↑ N above · ↓ M below` header and 1 for the
+  // status strip rendered at the bottom of this component.
+  const paneHeight = Math.max(4, (maxHeight ?? terminalRows) - 2);
   const paneColumns = Math.max(10, terminalColumns - 2);
 
   const [view, dispatch] = useReducer(logViewReducer, entries.length, createLogView);
@@ -370,10 +388,10 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   const prevRunningRef = useRef(agentRunning);
   useEffect(() => {
     if (prevRunningRef.current && !agentRunning) {
-      dispatch({ type: 'RUNNING_CHANGE', running: false });
+      dispatch({ type: 'RUNNING_CHANGE', running: false, entries });
     }
     prevRunningRef.current = agentRunning;
-  }, [agentRunning]);
+  }, [agentRunning, entries]);
 
   // ── Browse mode ──────────────────────────────────────────────────────
   // The conversation pane never competes with the InputBox for printable
@@ -535,35 +553,79 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   return (
     // Fixed height + overflow hidden: the pane is a stable viewport that
     // never grows with its content. No flexGrow — the parent gives it an
+    // Fixed height + overflow hidden: the pane is a stable viewport that
+    // never grows with its content. No flexGrow — the parent gives it an
     // exact row budget. computeWindow limits visibleEntries to fit.
-    <Box flexDirection="column" height={paneHeight} overflowY="hidden">
-      <Text dimColor> {headerText}</Text>
-      {visibleEntries.map((entry) => {
-        const isFocused = entry.id === entries[view.focusIndex]?.id;
-        // Only the focused entry participates in line-level scrolling: its
-        // body is windowed to the pane budget at the current offset. Other
-        // entries render whole (they were small enough to share the pane).
-        const budget = VISIBLE_BODY_BUDGET(paneHeight);
-        const scrollable =
-          isFocused &&
-          renderedBodyLines(entry, paneColumns, view.expanded, agentRunning) > budget;
-        return (
-          <MessageItem
-            key={entry.id}
-            entry={entry}
-            focused={isFocused}
-            expanded={view.expanded.has(entry.id)}
-            agentRunning={agentRunning}
-            columns={paneColumns}
-            lineOffset={scrollable ? view.lineOffset : 0}
-            maxLines={scrollable ? budget : undefined}
-          />
-        );
-      })}
-      {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
+    <Box flexDirection="column">
+      <Box flexDirection="column" height={paneHeight} overflowY="hidden">
+        <Text dimColor> {headerText}</Text>
+        {visibleEntries.map((entry) => {
+          const isFocused = entry.id === entries[view.focusIndex]?.id;
+          // Only the focused entry participates in line-level scrolling: its
+          // body is windowed to the pane budget at the current offset. Other
+          // entries render whole (they were small enough to share the pane).
+          const budget = VISIBLE_BODY_BUDGET(paneHeight);
+          const scrollable =
+            isFocused &&
+            renderedBodyLines(entry, paneColumns, view.expanded, agentRunning) > budget;
+          return (
+            <MessageItem
+              key={entry.id}
+              entry={entry}
+              focused={isFocused}
+              expanded={view.expanded.has(entry.id)}
+              agentRunning={agentRunning}
+              columns={paneColumns}
+              lineOffset={scrollable ? view.lineOffset : 0}
+              maxLines={scrollable ? budget : undefined}
+            />
+          );
+        })}
+        {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
+        {/* Live streaming phases — subscribed to the StreamStore, so token
+            deltas re-render only these panels, never the whole App. */}
+        {agentRunning ? <ThinkingPanel columns={paneColumns} /> : null}
+        {agentRunning ? <ResponsePanel columns={paneColumns} /> : null}
+      </Box>
+      {/* Reserved 1-line status strip — constant height, no reflow. */}
+      <SpinnerStrip agentRunning={agentRunning} queuedCount={queuedCount} />
     </Box>
   );
 });
+
+/**
+ * One-line status strip at the bottom of the log pane. The spinner text
+ * comes from the StreamStore (spinner-section subscription), so mid-turn
+ * text changes don't re-render anything above this line.
+ */
+function SpinnerStrip({ agentRunning, queuedCount }: {
+  agentRunning: boolean;
+  queuedCount: number;
+}): React.ReactElement {
+  const store = useStreamStore();
+  const spinner = useSyncExternalStore(store.subscribeSpinner, store.getSpinner);
+  const theme = getTheme();
+
+  const spinnerLine = agentRunning && spinner.active ? spinner.text : '';
+  const line =
+    spinnerLine || (queuedCount > 0
+      ? `📬 ${queuedCount} queued message${queuedCount !== 1 ? 's' : ''}`
+      : '');
+
+  return (
+    <Box height={1}>
+      {line ? (
+        agentRunning && spinnerLine ? (
+          <Spinner text={line} />
+        ) : (
+          <Text dimColor color={theme.warning}> {line}</Text>
+        )
+      ) : (
+        <Text> </Text>
+      )}
+    </Box>
+  );
+}
 
 // Memoize so typing in the InputBox (a sibling) doesn't re-render the
 // conversation pane — Ink re-renders the whole tree on every commit, and

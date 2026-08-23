@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React, { useEffect, useRef } from 'react';
 import { render } from 'ink-testing-library';
 import { useAgent } from '../src/tui/hooks/useAgent.js';
+import { StreamStore } from '../src/tui/streamStore.js';
 import type { AgentStep, AgentResponse, ToolCall } from '@tiny-cli/core';
 
 // ─── Stub Agent ────────────────────────────────────────────────────────
@@ -107,6 +108,7 @@ function Harness({ agent }: { agent: any }) {
     },
     addLog: () => {},
     getMode: () => 'agent' as const,
+    streamStore: new StreamStore(),
   });
 
   // Keep the latest api/patches reachable from outside render via ref.

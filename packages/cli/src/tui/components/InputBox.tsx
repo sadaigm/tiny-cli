@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef } from 'react';
-import { Box, Text, useInput, usePaste } from 'ink';
+import { Box, Text, useInput, usePaste, useStdout } from 'ink';
 import type { TuiMode, AgentState } from '../state.js';
 import AutocompletePopover from './AutocompletePopover.js';
 import TextInput from './TextInput.js';
@@ -46,6 +46,8 @@ export interface InputBoxProps {
    * search prompt owns Esc (cancel search).
    */
   onSearchActiveChange?: (active: boolean) => void;
+  /** Optional dispatch function for debug logging */
+  dispatch?: (action: any) => void;
   /**
    * Whether the text input receives keystrokes. False while a modal overlay
    * (approval / recovery / selector) owns the keyboard — its quick-select
@@ -75,7 +77,7 @@ function modeColors(): Record<TuiMode, string> {
  * constant block — regardless of how many matches there are — prevents the
  * pane above from reflowing/flickering as the filter result count changes.
  */
-const MENTION_POPOVER_ROWS = 6;
+export const MENTION_POPOVER_ROWS = 16;
 
 /** Short label for each mode shown after the chevron. */
 const MODE_LABELS: Record<TuiMode, string> = {
@@ -127,7 +129,10 @@ function InputBox({
   onMentionActiveChange,
   onSearchActiveChange,
   focus = true,
+  dispatch,
 }: InputBoxProps): React.ReactElement {
+  const { stdout } = useStdout();
+  const terminalColumns = stdout?.columns ?? 80;
   const [value, setValue] = useState('');
   // Bumped whenever we programmatically replace the input value, so
   // TextInput snaps its cursor to the end (see cursorToEndSignal).
@@ -539,7 +544,7 @@ function InputBox({
           <AutocompletePopover
             title={`Commands (/${slashQuery})`}
             items={slashItems.map((c) => ({ label: `/${c.name}`, description: c.description }))}
-            maxVisible={MENTION_POPOVER_ROWS - 1}
+            maxVisible={MENTION_POPOVER_ROWS - 5}
             onSelect={acceptSlash}
             onDismiss={() => setSlashActive(false)}
             isActive={slashActive}
@@ -552,7 +557,7 @@ function InputBox({
           <AutocompletePopover
             title={`Mention file (@${mentionQuery})`}
             items={mentionItems}
-            maxVisible={MENTION_POPOVER_ROWS - 1}
+            maxVisible={MENTION_POPOVER_ROWS - 5}
             onSelect={acceptMention}
             onDismiss={() => setMentionActive(false)}
             isActive={mentionActive}

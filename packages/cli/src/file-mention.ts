@@ -70,7 +70,7 @@ export async function buildFileIndex(root: string): Promise<string[]> {
  */
 export function searchFiles(index: string[], query: string): string[] {
   const results = fuzzy.filter(query, index);
-  return results.map(el => el.original).slice(0, 8);
+  return results.map(el => el.original).slice(0, 25);
 }
 
 /**
