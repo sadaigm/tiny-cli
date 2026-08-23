@@ -1,4 +1,4 @@
-import type { ToolCall } from '@tiny-cli/core';
+import type { AskUserAnswer, AskUserPayload, ToolCall } from '@tiny-cli/core';
 import type { AutocompleteItem } from './components/AutocompletePopover.js';
 
 /** Execution mode — determines which tools and system prompt the agent uses. */
@@ -110,6 +110,16 @@ export interface PendingPlanConfirm {
   taskCount: number;
 }
 
+/** Active questionnaire shown by <QuestionnaireModal/>. */
+export interface PendingQuestionnaire {
+  /** Questionnaire payload from the ask_user tool. */
+  payload: AskUserPayload;
+  /** Zero-based index of the question currently displayed. */
+  currentIndex: number;
+  /** Answers collected so far (index-aligned with payload.questions). */
+  answers: AskUserAnswer[];
+}
+
 /**
  * The complete TUI state owned by the root <App> component.
  * Managed via useReducer in app.tsx.
@@ -123,6 +133,8 @@ export interface TuiState {
   log: LogEntry[];
   /** Tool call awaiting user approval, or null when none pending. */
   pendingApproval: ToolCall | null;
+  /** Active questionnaire shown by <QuestionnaireModal/>, or null when none pending. */
+  pendingQuestions: PendingQuestionnaire | null;
   /** Messages submitted while agent was busy, waiting to be processed. */
   messageQueue: string[];
   /** Text displayed next to the spinner while running. */

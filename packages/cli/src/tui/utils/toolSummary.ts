@@ -87,6 +87,7 @@ function capLines(value: string, max: number): string {
  * - `bash` → `cmd`
  * - `grep` → `pattern` in `path`
  * - `glob` → `pattern`
+ * - `ask_user` → first question (+ full questionnaire in detail)
  *
  * Unknown tools fall back to a capped raw-args representation.
  *
@@ -173,6 +174,41 @@ export function summarizeToolCall(entry: LogEntry, columns: number): ToolSummary
     }
     case 'glob': {
       return { header: `glob  ${truncate(str('pattern') ?? '<no pattern>', cap)}`, hiddenLineCount: 0 };
+    }
+    case 'ask_user': {
+      // Questions arrive as a nested array on the args object. Pull the
+      // first question for the header and render the full questionnaire
+      // as a readable list for the expanded detail block.
+      const questions = Array.isArray(args?.questions)
+        ? (args.questions as Array<Record<string, unknown>>)
+        : [];
+      const first = questions[0];
+      const firstQuestion =
+        typeof first?.question === 'string' ? first.question : '<no question>';
+      // Reserve room for the "ask_user  Q1: " prefix inside the cap.
+      const qBudget = Math.max(4, cap - 'ask_user  Q1: '.length);
+      const header = `ask_user  Q1: ${truncate(firstQuestion, qBudget)}`;
+      const detail =
+        questions.length > 0
+          ? capLines(
+              questions
+                .map((q, i) => {
+                  const questionText =
+                    typeof q?.question === 'string' ? q.question : '<no question>';
+                  const opts = Array.isArray(q?.options)
+                    ? (q.options as unknown[]).filter(
+                        (o): o is string => typeof o === 'string',
+                      )
+                    : [];
+                  return `Q${i + 1}: ${questionText}\n${opts
+                    .map((o) => `  - ${o}`)
+                    .join('\n')}`;
+                })
+                .join('\n'),
+              MAX_DETAIL_LINES,
+            )
+          : undefined;
+      return { header, detail, hiddenLineCount: 0 };
     }
     case 'mark_task_complete':
     case 'manage_tasks': {

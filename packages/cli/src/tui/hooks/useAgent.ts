@@ -1,11 +1,13 @@
 import { useCallback, useRef } from 'react';
 import type { Agent, AgentStep, SessionManager, ToolCall } from '@tiny-cli/core';
 import { logError } from '@tiny-cli/core';
+import type { AskUserPayload, AskUserResponse } from '@tiny-cli/core';
 import type { StreamStore } from '../streamStore.js';
 import type {
   TuiMode,
   LogEntry,
   LogEntryType,
+  PendingQuestionnaire,
   PendingRecovery,
   PendingPlanConfirm,
 } from '../state.js';
@@ -93,6 +95,7 @@ export interface UseAgentStatePatch {
   agentState?: 'idle' | 'running' | 'awaiting_approval' | 'error';
   spinnerText?: string;
   pendingApproval?: ToolCall | null;
+  pendingQuestions?: PendingQuestionnaire | null;
   messageQueue?: string[];
   contextStats?: { tokens: number; characters: number };
   pendingRecovery?: PendingRecovery | null;
@@ -157,6 +160,8 @@ export interface UseAgentApi {
   clearQueue: () => void;
   /** Resolve the pending approval modal with the user's choice. */
   resolveApproval: (choice: ApprovalChoice) => void;
+  /** Resolve the pending questionnaire modal with the user's answers. */
+  resolveQuestionnaire: (response: AskUserResponse) => void;
   /**
    * Execute the active plan: iterate over incomplete tasks, run each
    * through the agent, and handle recovery when tasks aren't marked done.
@@ -232,6 +237,9 @@ export function useAgent({
   /** Deferred promise for the plan-execute confirm modal, if any. */
   const planConfirmDeferredRef = useRef<Deferred<boolean> | null>(null);
 
+  /** Deferred promise for the current questionnaire modal, if any. */
+  const questionnaireDeferredRef = useRef<Deferred<AskUserResponse> | null>(null);
+
   /**
    * Latest `executePlan` — lets the earlier-defined `runAgentTurn`
    * call it without a circular dependency in the useCallback chain.
@@ -300,6 +308,37 @@ export function useAgent({
       setState({
         agentState: 'running',
         pendingApproval: null,
+      });
+
+      return result;
+    },
+    [setState],
+  );
+
+  /**
+   * Display the questionnaire modal and return the user's answers via a
+   * deferred promise.
+   *
+   * Called synchronously by `agent.run()`'s `onAskUser` callback.
+   * Sets `pendingQuestions` state so `<QuestionnaireModal>` renders,
+   * then awaits `questionnaireDeferredRef.current.promise`.  The UI
+   * calls `resolveQuestionnaire()` to settle the promise.
+   */
+  const showQuestionnaire = useCallback(
+    async (payload: AskUserPayload): Promise<AskUserResponse> => {
+      const deferred = createDeferred<AskUserResponse>();
+      questionnaireDeferredRef.current = deferred;
+
+      setState({
+        agentState: 'awaiting_approval',
+        pendingQuestions: { payload, currentIndex: 0, answers: [] },
+      });
+
+      const result = await deferred.promise;
+
+      setState({
+        agentState: 'running',
+        pendingQuestions: null,
       });
 
       return result;
@@ -427,6 +466,7 @@ export function useAgent({
           onApproval,
           onText,
           onReasoning,
+          showQuestionnaire,
         );
 
         // Log the final assistant response (if non-empty). When the whole
@@ -782,6 +822,24 @@ CRITICAL INSTRUCTIONS:
     [],
   );
 
+  /**
+   * Resolve the pending questionnaire modal.
+   *
+   * Called by `<QuestionnaireModal>` when the user answers all questions
+   * or skips.  Settles the deferred promise, unblocking `agent.run()`'s
+   * `onAskUser` callback.
+   */
+  const resolveQuestionnaire = useCallback(
+    (response: AskUserResponse): void => {
+      const deferred = questionnaireDeferredRef.current;
+      if (deferred) {
+        questionnaireDeferredRef.current = null;
+        deferred.resolve(response);
+      }
+    },
+    [],
+  );
+
   // Keep the ref pointing at the latest executePlan so runAgentTurn
   // (defined above it) can call it without a circular useCallback dep.
   executePlanRef.current = executePlan;
@@ -805,6 +863,7 @@ CRITICAL INSTRUCTIONS:
     abortCurrentRun,
     clearQueue,
     resolveApproval,
+    resolveQuestionnaire,
     executePlan,
     resolveRecovery,
     resolvePlanConfirm,

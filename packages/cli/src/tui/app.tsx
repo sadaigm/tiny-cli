@@ -14,6 +14,7 @@ import { StreamProvider } from './components/StreamProvider.js';
 import { StreamStore } from './streamStore.js';
 import InputBox, { MENTION_POPOVER_ROWS } from './components/InputBox.js';
 import ApprovalModal from './components/ApprovalModal.js';
+import QuestionnaireModal from './components/QuestionnaireModal.js';
 import RecoveryModal from './components/RecoveryModal.js';
 import PlanConfirmModal from './components/PlanConfirmModal.js';
 
@@ -74,6 +75,7 @@ function createInitialState(
     mode,
     log: [],
     pendingApproval: null,
+    pendingQuestions: null,
     messageQueue: [],
     spinnerText: '',
     showAutocomplete: false,
@@ -974,6 +976,7 @@ export default function App({
   useInput((input, key) => {
     // Don't intercept when an overlay/modal is handling its own input.
     if (stateRef.current.pendingApproval) return;
+    if (stateRef.current.pendingQuestions) return;
     if (stateRef.current.pendingRecovery) return;
     if (stateRef.current.pendingPlanConfirm) return;
     if (stateRef.current.pendingSelector) return;
@@ -1047,6 +1050,7 @@ export default function App({
   // consumer is open (key-precedence ladder: modal > selector > autocomplete).
   const paneKeysActive =
     !state.pendingApproval &&
+    !state.pendingQuestions &&
     !state.pendingRecovery &&
     !state.pendingPlanConfirm &&
     !state.pendingSelector &&
@@ -1126,7 +1130,7 @@ export default function App({
         height={topBoxHeight}
         borderStyle="round"
         borderColor={
-          state.pendingApproval || state.pendingRecovery ? theme.warning
+          state.pendingApproval || state.pendingQuestions || state.pendingRecovery ? theme.warning
           : state.agentState === 'error' ? theme.error
           : theme.border
         }
@@ -1164,7 +1168,7 @@ export default function App({
           fileIndex={fileIndex}
           onMentionActiveChange={setMentionActive}
           onSearchActiveChange={setSearchActive}
-          focus={!browseMode && !state.pendingApproval && !state.pendingRecovery && !state.pendingPlanConfirm && !state.pendingSelector}
+          focus={!browseMode && !state.pendingApproval && !state.pendingQuestions && !state.pendingRecovery && !state.pendingPlanConfirm && !state.pendingSelector}
           dispatch={dispatch}
         />
       </Box>
@@ -1189,6 +1193,14 @@ export default function App({
       {/* Approval modal overlay */}
       {state.pendingApproval ? (
         <ApprovalModal toolCall={state.pendingApproval} onSelect={agentApi.resolveApproval} />
+      ) : null}
+
+      {/* Questionnaire modal overlay (agent asked the user) */}
+      {state.pendingQuestions ? (
+        <QuestionnaireModal
+          questionnaire={state.pendingQuestions}
+          onDone={agentApi.resolveQuestionnaire}
+        />
       ) : null}
 
       {/* Recovery modal overlay (task not marked complete) */}

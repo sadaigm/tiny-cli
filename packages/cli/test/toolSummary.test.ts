@@ -76,6 +76,35 @@ describe('summarizeToolCall — per-tool meaningful field', () => {
     expect(summarizeToolCall(entry, COLS).header).toBe('insert_lines  foo.ts @42');
   });
 
+  it('ask_user: shows first question in header, full list in detail', () => {
+    const entry = call('ask_user', {
+      context: 'Choosing an auth provider',
+      questions: [
+        { question: 'Which provider?', options: ['OAuth', 'Magic link'] },
+        { question: 'Store sessions where?', options: ['Cookie', 'DB'] },
+      ],
+    });
+    const s = summarizeToolCall(entry, COLS);
+    expect(s.header).toBe('ask_user  Q1: Which provider?');
+    expect(s.header).not.toContain('Magic link');
+    expect(s.detail).toContain('Q1: Which provider?');
+    expect(s.detail).toContain('  - OAuth');
+    expect(s.detail).toContain('Q2: Store sessions where?');
+    expect(s.hiddenLineCount).toBe(0);
+  });
+
+  it('ask_user: survives malformed questions (missing/not an array)', () => {
+    expect(summarizeToolCall(call('ask_user', {}), COLS).header).toBe(
+      'ask_user  Q1: <no question>',
+    );
+    expect(summarizeToolCall(call('ask_user', { questions: 'oops' }), COLS).header).toBe(
+      'ask_user  Q1: <no question>',
+    );
+    expect(summarizeToolCall(call('ask_user', { questions: [{ question: 7 }] }), COLS).header).toBe(
+      'ask_user  Q1: <no question>',
+    );
+  });
+
   it('unknown tool: falls back to a capped raw representation', () => {
     const entry = call('mystery_tool', { a: 1, b: 2 });
     const s = summarizeToolCall(entry, COLS);
