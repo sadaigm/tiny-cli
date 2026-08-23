@@ -334,8 +334,8 @@ GUIDANCE FOR PLAN EXECUTION:
       }
 
       if (response.tool_calls && response.tool_calls.length > 0) {
-        console.log(
-          `[Agent] Executing ${response.tool_calls.length} tool call(s) in parallel ` +
+        logDebug(
+          `Executing ${response.tool_calls.length} tool call(s) in parallel ` +
           `(independent calls run concurrently; conflicting calls serialize)...`
         );
 
@@ -377,7 +377,7 @@ GUIDANCE FOR PLAN EXECUTION:
 
           // Redundancy: block exact duplicates seen before or within this batch.
           if (preBatchKeys.has(callKey) || seenInBatch.has(callKey)) {
-            console.log(`[Agent] Redundancy detected for ${callKey}. Blocking call.`);
+            logDebug(`Redundancy detected for ${callKey}. Blocking call.`);
             plan.push({ index: i, call, kind: "REDUNDANT" });
             continue;
           }
@@ -450,7 +450,7 @@ GUIDANCE FOR PLAN EXECUTION:
         ): Promise<ExecResult> => {
           const label = toolLabel(entry.call);
           const t0 = performance.now();
-          console.log(`[Agent] ▶ start ${label}`);
+          logDebug(`▶ start ${label}`);
           let result: string;
           try {
             let parsedArgs: any = {};
@@ -466,11 +466,11 @@ GUIDANCE FOR PLAN EXECUTION:
             }
           } catch (error: any) {
             result = `Tool Error: ${error.message}`;
-            console.error(`[Agent] Tool execution failed: ${error.message}`);
+            logDebug(`Tool execution failed: ${error.message}`);
           }
           const toolCallMs = performance.now() - t0;
           execWindows.push({ index: entry.index, start: t0, end: t0 + toolCallMs, name: entry.call.function.name });
-          console.log(`[Agent] ✔ done ${label} [${Math.round(toolCallMs)}ms]`);
+          logDebug(`✔ done ${label} [${Math.round(toolCallMs)}ms]`);
           return {
             result,
             toolCallMs,
@@ -520,8 +520,8 @@ GUIDANCE FOR PLAN EXECUTION:
         if (execEntries.length > 0) {
           const sumMs = execWindows.reduce((acc, w) => acc + (w.end - w.start), 0);
           const maxConcurrency = computeMaxConcurrency(execWindows);
-          console.log(
-            `[Agent] Batch done: ${execEntries.length} tools, ` +
+          logDebug(
+            `Batch done: ${execEntries.length} tools, ` +
             `max concurrency ${maxConcurrency}, ` +
             `wall-clock ${Math.round(batchWallMs)}ms ` +
             `(sum of tools ${Math.round(sumMs)}ms` +
@@ -543,7 +543,7 @@ GUIDANCE FOR PLAN EXECUTION:
               toolCallMs: 0,
               aborted: !!signal?.aborted,
             };
-            console.error(`[Agent] Tool execution failed: ${msg}`);
+            logDebug(`Tool execution failed: ${msg}`);
           }
         });
 
@@ -722,7 +722,7 @@ GUIDANCE FOR PLAN EXECUTION:
     }
 
     if (!force) {
-      console.log(`\n[Agent] Context size (${stats.tokens} tokens) exceeds ${compactionThreshold.toLocaleString()}. Compacting memory...`);
+      logDebug(`Context size (${stats.tokens} tokens) exceeds ${compactionThreshold.toLocaleString()}. Compacting memory...`);
     }
 
     const systemMessages = this.messages.filter(m => m.role === 'system');
@@ -777,14 +777,14 @@ GUIDANCE FOR PLAN EXECUTION:
       ];
 
       if (!force) {
-        console.log(`[Agent] Memory compacted. New context size: ${this.getContextStats().tokens} tokens.\n`);
+        logDebug(`Memory compacted. New context size: ${this.getContextStats().tokens} tokens.\n`);
       }
       return this.getContextStats().tokens;
     } catch (err: any) {
       if (err.name === 'AbortError' || signal?.aborted) {
         // Aborted, do nothing
       } else if (!force) {
-        console.error(`[Agent] Memory compaction failed: ${err.message}`);
+        logDebug(`Memory compaction failed: ${err.message}`);
       }
       if (force) throw err;
       return null;

@@ -7,6 +7,7 @@ import type {
   LogEntry,
   LogEntryType,
   PendingRecovery,
+  PendingPlanConfirm,
 } from '../state.js';
 import {
   MessageQueue,
@@ -96,6 +97,7 @@ export interface UseAgentStatePatch {
   contextStats?: { tokens: number; characters: number };
   pendingRecovery?: PendingRecovery | null;
   planExecuting?: boolean;
+  pendingPlanConfirm?: PendingPlanConfirm | null;
 }
 
 /** Callback the hook calls whenever a new log entry is produced. */
@@ -122,6 +124,8 @@ export interface UseAgentProps {
   addLog: AddLogFn;
   /** Returns the current execution mode at call-time. */
   getMode: GetModeFn;
+  /** Switches the active execution mode (e.g. plan → agent after executing). */
+  setMode: (mode: TuiMode) => void;
   /**
    * External store for live streaming content. Thinking/response deltas
    * are concatenated here (re-rendering only the small subscribed
@@ -160,6 +164,8 @@ export interface UseAgentApi {
   executePlan: () => void;
   /** Resolve the pending recovery modal with the user's choice. */
   resolveRecovery: (choice: RecoveryChoice) => void;
+  /** Resolve the pending plan-execute confirm modal with the user's choice. */
+  resolvePlanConfirm: (execute: boolean) => void;
 }
 
 /**
@@ -206,6 +212,7 @@ export function useAgent({
   setState,
   addLog,
   getMode,
+  setMode,
   streamStore,
 }: UseAgentProps): UseAgentApi {
   // ── Refs (persist across renders without triggering re-render) ──
@@ -221,6 +228,15 @@ export function useAgent({
 
   /** Deferred promise for the current recovery modal, if any. */
   const recoveryDeferredRef = useRef<Deferred<RecoveryChoice> | null>(null);
+
+  /** Deferred promise for the plan-execute confirm modal, if any. */
+  const planConfirmDeferredRef = useRef<Deferred<boolean> | null>(null);
+
+  /**
+   * Latest `executePlan` — lets the earlier-defined `runAgentTurn`
+   * call it without a circular dependency in the useCallback chain.
+   */
+  const executePlanRef = useRef<() => void>(() => {});
 
   /** Whether plan execution is currently active (ref for synchronous reads). */
   const planExecutingRef = useRef(false);
@@ -455,6 +471,35 @@ export function useAgent({
             spinnerText: '',
             messageQueue: [],
           });
+          // Plan-mode turn just finished with a written plan — execute it
+          // (port of the old REPL's "Execute this plan?" flow). In `auto`
+          // permission mode the user already granted execution, so start
+          // immediately without the confirm modal; otherwise ask first.
+          if (mode === 'plan') {
+            const tasks = parseIncompleteTasks(await readPlanTaskFile(sessionId));
+            if (tasks.length > 0) {
+              const autoMode = agent.getConfig().permissionMode === 'auto';
+              const execute = autoMode
+                ? true
+                : await new Promise<boolean>((resolve) => {
+                    const deferred = createDeferred<boolean>();
+                    planConfirmDeferredRef.current = deferred;
+                    setState({ pendingPlanConfirm: { taskCount: tasks.length } });
+                    deferred.promise.then(resolve);
+                  });
+              setState({ pendingPlanConfirm: null });
+              if (execute) {
+                // Switch to agent mode, then kick off execution — same
+                // sequence as the old REPL (executeActivePlan → mode=agent).
+                setMode('agent');
+                addLog({
+                  type: 'system',
+                  content: 'Switched to agent mode.',
+                });
+                executePlanRef.current();
+              }
+            }
+          }
           // Terminal bell: long turns often finish while the user has
           // tabbed away — BEL snaps the tab/title indicator. Fire only
           // after a meaningful run so quick replies don't chirp.
@@ -479,7 +524,7 @@ export function useAgent({
         });
       }
     },
-    [agent, setState, addLog, getMode, streamStore, showApprovalModal, saveSession, sessionManager, sessionId],
+    [agent, setState, addLog, getMode, setMode, streamStore, showApprovalModal, saveSession, sessionManager, sessionId],
   );
 
   // ── Public API ──────────────────────────────────────────────────
@@ -601,7 +646,7 @@ export function useAgent({
         if (abortExecution) break;
         const task = tasks[i];
         addLog({
-          type: 'system',
+          type: 'plan',
           content: `[Executing Task ${i + 1}/${tasks.length}] ${task.text}`,
         });
 
@@ -673,14 +718,14 @@ CRITICAL INSTRUCTIONS:
                 );
                 await writePlanTaskFile(sessionId, manualContent);
                 addLog({
-                  type: 'system',
+                  type: 'plan',
                   content: `Task ${i + 1}/${tasks.length} marked as done manually.`,
                 });
                 break;
               }
               case 'skip':
                 addLog({
-                  type: 'system',
+                  type: 'plan',
                   content: `Task ${i + 1}/${tasks.length} skipped.`,
                 });
                 break;
@@ -695,10 +740,10 @@ CRITICAL INSTRUCTIONS:
       planExecutingRef.current = false;
       setState({ planExecuting: false });
       addLog({
-        type: 'system',
+        type: 'plan',
         content: abortExecution
           ? 'Plan execution aborted.'
-          : 'Plan execution finished.',
+          : 'Plan execution finished. All tasks processed.',
       });
     })();
   }, [sessionId, addLog, setState, runAgentTurn]);
@@ -721,6 +766,27 @@ CRITICAL INSTRUCTIONS:
   );
 
   /**
+   * Resolve the pending plan-execute confirm modal.
+   *
+   * Called by `<PlanConfirmModal>` when the user selects an option.
+   * Settles the deferred promise, unblocking `runAgentTurn`.
+   */
+  const resolvePlanConfirm = useCallback(
+    (execute: boolean): void => {
+      const deferred = planConfirmDeferredRef.current;
+      if (deferred) {
+        planConfirmDeferredRef.current = null;
+        deferred.resolve(execute);
+      }
+    },
+    [],
+  );
+
+  // Keep the ref pointing at the latest executePlan so runAgentTurn
+  // (defined above it) can call it without a circular useCallback dep.
+  executePlanRef.current = executePlan;
+
+  /**
    * Discard every queued message. The in-flight turn keeps running.
    */
   const clearQueue = useCallback((): void => {
@@ -741,5 +807,6 @@ CRITICAL INSTRUCTIONS:
     resolveApproval,
     executePlan,
     resolveRecovery,
+    resolvePlanConfirm,
   };
 }

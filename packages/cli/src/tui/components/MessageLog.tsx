@@ -210,8 +210,12 @@ function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, 
   // Count rendered lines: each explicit newline is its own line, plus
   // soft-wrap for lines longer than the usable width. Collapsed standard
   // entries cap at MAX_STANDARD_BODY_LINES (matching MessageItem's render).
+  // User/assistant messages are exempt — they render in full (see MessageItem).
   const rawBodyLines = entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
-  let bodyLines = expanded.has(entry.id) ? rawBodyLines : Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
+  let bodyLines =
+    expanded.has(entry.id) || entry.type === 'user' || entry.type === 'assistant'
+      ? rawBodyLines
+      : Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
   if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
   // user/assistant have a header row ("❯ You:" / "🤖 Agent:"); others are body-only.
   const headerLines = entry.type === 'user' || entry.type === 'assistant' ? 1 : 0;
@@ -240,6 +244,8 @@ function renderedBodyLines(entry: LogEntry, columns: number, expanded: Set<strin
   }
   if (entry.content.length === 0) return 0;
   const raw = wrappedLineCount(entry.content, usable);
+  // User/assistant messages render in full even when collapsed (see MessageItem).
+  if (entry.type === 'user' || entry.type === 'assistant') return raw;
   return expanded.has(entry.id) ? raw : Math.min(raw, MAX_STANDARD_BODY_LINES);
 }
 

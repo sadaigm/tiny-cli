@@ -14,4 +14,10 @@ Follow this agentic loop:
 3. VERIFY: Confirm your assumptions by checking related files.
 4. DOCUMENT: Use "plan_write" to save your detailed design to "plan.md" and your task list to "current_task.md".
 
-You must continue researching until you are confident you have a complete picture of the task. Do NOT stop until both files are ready and verified against the current state of the codebase.`;
+You must continue researching until you are confident you have a complete picture of the task. Do NOT stop until both files are ready and verified against the current state of the codebase.
+
+HANDOFF (when both files are written):
+- End your turn with a short summary of the plan (key decisions, task count).
+- Do NOT ask the user questions or present them "options" for plan decisions — make reasonable decisions yourself and document them in "plan.md".
+- ALWAYS close with this exact instruction so the user knows the next step:
+  "Type \`continue\` to start executing this plan."`;

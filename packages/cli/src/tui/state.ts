@@ -15,6 +15,7 @@ export type LogEntryType =
   | 'tool_call'
   | 'tool_result'
   | 'system'
+  | 'plan'
   | 'error'
   | 'info';
 
@@ -100,6 +101,16 @@ export interface PendingRecovery {
 }
 
 /**
+ * Shown after a plan-mode turn completes: ask the user whether to
+ * execute the freshly written plan (port of the old REPL's
+ * "Execute this plan?" inquirer confirm).
+ */
+export interface PendingPlanConfirm {
+  /** Number of incomplete tasks found in `current_task.md`. */
+  taskCount: number;
+}
+
+/**
  * The complete TUI state owned by the root <App> component.
  * Managed via useReducer in app.tsx.
  */
@@ -128,6 +139,8 @@ export interface TuiState {
   pendingRecovery: PendingRecovery | null;
   /** True when plan execution is actively running. */
   planExecuting: boolean;
+  /** Plan-execute confirm modal data, or null when none pending. */
+  pendingPlanConfirm: PendingPlanConfirm | null;
   /** Inline selector overlay state, or null when no overlay is open. */
   pendingSelector: PendingSelector | null;
   /** Whether mouse-wheel scrolling of the conversation pane is enabled. */

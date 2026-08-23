@@ -15,6 +15,7 @@ import { StreamStore } from './streamStore.js';
 import InputBox, { MENTION_POPOVER_ROWS } from './components/InputBox.js';
 import ApprovalModal from './components/ApprovalModal.js';
 import RecoveryModal from './components/RecoveryModal.js';
+import PlanConfirmModal from './components/PlanConfirmModal.js';
 
 import { useConsoleCapture } from './hooks/useConsoleCapture.js';
 import { useAgent, type UseAgentStatePatch, type NewLogEntry } from './hooks/useAgent.js';
@@ -22,6 +23,7 @@ import { useAgent, type UseAgentStatePatch, type NewLogEntry } from './hooks/use
 import { hydrateMessage, buildFileIndex } from '../file-mention.js';
 import { fetchModels } from '../commands/handlers.js';
 import { SLASH_COMMANDS } from './utils/commands.js';
+import { readPlanTaskFile, parseIncompleteTasks } from './utils/planReader.js';
 import { findInLog } from './utils/logSearch.js';
 import type { Theme } from './theme.js';
 import { bindingFor, matchesBinding } from './keybindings.js';
@@ -40,6 +42,14 @@ const HELP_KEY_LINES: string[] = [
   '/mouse on    enable mouse-wheel scrolling',
 ];
 
+
+/**
+ * Free-form phrases that express clear intent to run the plan task-by-task
+ * (not just the bare `continue` keyword). Matched against a normalized
+ * (lowercased, trailing punctuation stripped) input in `handleSubmit`.
+ */
+const PLAN_EXECUTION_INTENT =
+  /^(?:go|start|run|begin|proceed|execute)(?:\s+(?:the\s+)?(?:with\s+)?(?:this\s+)?plan\b|\s+task\s+by\s+task)|^task\s+by\s+task$|^execute\s+(?:the\s+)?tasks?$/;
 /** Compact relative time like "2d ago" / "3h ago" / "just now". */
 function relativeTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -72,6 +82,7 @@ function createInitialState(
     contextStats: { tokens: 0, characters: 0 },
     pendingRecovery: null,
     planExecuting: false,
+    pendingPlanConfirm: null,
     pendingSelector: null,
     // Mouse scroll is opt-in: Ink v5 reads stdin itself, so SGR mouse
     // reports leak into the text input. Enable with `/mouse` only.
@@ -294,9 +305,18 @@ export default function App({
     setState: setStateForAgent,
     addLog,
     getMode: () => stateRef.current.mode,
+    setMode: (mode) => dispatch({ type: 'SET_MODE', mode }),
     streamStore,
   });
 
+  /** True when the active session's plan has at least one `- [ ]` task. */
+  const hasPendingPlanTasks = useCallback(async (): Promise<boolean> => {
+    const sid = stateRef.current._sessionId ?? sessionId;
+    const content = await readPlanTaskFile(sid);
+    return parseIncompleteTasks(content).length > 0;
+  }, [sessionId]);
+
+  // ── Slash command handling ──
   // ── Slash command handling ──
   const handleSlashCommand = useCallback(
     async (input: string): Promise<boolean> => {
@@ -801,8 +821,24 @@ export default function App({
         return;
       }
 
-      // Bare "continue" triggers structured plan execution
-      if (text.toLowerCase() === 'continue') {
+      // Explicit plan-execution intent triggers the structured task-by-task
+      // executor (with per-task banners). Users rarely type the bare
+      // "continue" keyword — phrases like "go task by task" previously fell
+      // through to free-form chat, where the agent ran all tasks in one
+      // turn with no visible task progress. Only route when pending tasks
+      // exist — otherwise the message must reach the agent normally.
+      const normalized = text.toLowerCase().trim().replace(/[.!]+$/, '');
+      if (
+        normalized !== 'continue' &&
+        PLAN_EXECUTION_INTENT.test(normalized) &&
+        (await hasPendingPlanTasks())
+      ) {
+        agentApi.executePlan();
+        return;
+      }
+      // Bare "continue" always starts plan execution (the planner prompt
+      // ends with 'Type `continue` to start executing this plan.').
+      if (normalized === 'continue') {
         agentApi.executePlan();
         return;
       }
@@ -939,6 +975,7 @@ export default function App({
     // Don't intercept when an overlay/modal is handling its own input.
     if (stateRef.current.pendingApproval) return;
     if (stateRef.current.pendingRecovery) return;
+    if (stateRef.current.pendingPlanConfirm) return;
     if (stateRef.current.pendingSelector) return;
     // Ctrl+R search owns Esc (cancel search) — must not abort the turn.
     if (searchActiveRef.current) return;
@@ -1011,6 +1048,7 @@ export default function App({
   const paneKeysActive =
     !state.pendingApproval &&
     !state.pendingRecovery &&
+    !state.pendingPlanConfirm &&
     !state.pendingSelector &&
     !state.showAutocomplete &&
     !mentionActive &&
@@ -1126,7 +1164,7 @@ export default function App({
           fileIndex={fileIndex}
           onMentionActiveChange={setMentionActive}
           onSearchActiveChange={setSearchActive}
-          focus={!browseMode && !state.pendingApproval && !state.pendingRecovery && !state.pendingSelector}
+          focus={!browseMode && !state.pendingApproval && !state.pendingRecovery && !state.pendingPlanConfirm && !state.pendingSelector}
           dispatch={dispatch}
         />
       </Box>
@@ -1156,6 +1194,14 @@ export default function App({
       {/* Recovery modal overlay (task not marked complete) */}
       {state.pendingRecovery ? (
         <RecoveryModal recovery={state.pendingRecovery} onSelect={agentApi.resolveRecovery} />
+      ) : null}
+
+      {/* Plan-execute confirm overlay (plan turn finished) */}
+      {state.pendingPlanConfirm ? (
+        <PlanConfirmModal
+          taskCount={state.pendingPlanConfirm.taskCount}
+          onSelect={agentApi.resolvePlanConfirm}
+        />
       ) : null}
 
       {/* Inline selector overlay (model / mode / session picker) —

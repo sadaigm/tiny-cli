@@ -49,6 +49,7 @@ const ICONS: Record<LogEntryType, string> = {
   tool_call: '🔧',
   tool_result: '↳',
   system: 'ℹ',
+  plan: '▶',
   error: '✖',
   info: 'ℹ',
 };
@@ -63,6 +64,7 @@ function entryColors(): Record<LogEntryType, string> {
     tool_call: theme.toolCall,
     tool_result: theme.toolResult,
     system: theme.system,
+    plan: theme.accent,
     error: theme.error,
     info: theme.system,
   };
@@ -236,17 +238,22 @@ export default function MessageItem({
   }
 
   // --- Standard entries: header + soft-wrapped, indented body ---
+  // Plan banners stay theme-accented in the body (not dimmed gray) so the
+  // current task is always visually distinct while a plan executes.
   const bodyColor =
-    entry.type === 'error' ? 'red' : entry.type === 'system' || entry.type === 'info' ? 'gray' : undefined;
+    entry.type === 'error' ? 'red' : entry.type === 'system' || entry.type === 'info' ? 'gray' : entry.type === 'plan' ? color : undefined;
 
   // Cap the body when collapsed so a single giant entry (e.g. a captured
   // file dump or hydration log) can't dominate the pane and cause redraw
-  // flicker. The full text is shown only when expanded.
+  // flicker. The full text is shown only when expanded. User and assistant
+  // messages are exempt: both sides of the conversation must stay readable,
+  // collapsed or not.
   const fullBody = wrapIndent(entry.content, 3, columns);
   const fullLines = fullBody.split('\n');
   let body = clip(fullBody);
   let hiddenHint = '';
-  if (!expanded && fullLines.length > MAX_STANDARD_BODY_LINES) {
+  const cappedType = entry.type === 'system' || entry.type === 'info' || entry.type === 'error';
+  if (cappedType && !expanded && fullLines.length > MAX_STANDARD_BODY_LINES) {
     body = fullLines.slice(0, MAX_STANDARD_BODY_LINES).join('\n');
     hiddenHint = `  ⤤ +${fullLines.length - MAX_STANDARD_BODY_LINES} lines`;
   }
