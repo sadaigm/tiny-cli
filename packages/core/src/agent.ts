@@ -5,6 +5,8 @@ import {
   AgentResponse,
   AgentStep,
   ToolCall,
+  AskUserPayload,
+  AskUserResponse,
 } from "./types.js";
 import { ModelClient } from "./model/client.js";
 import { ToolRegistry } from "./tools/registry.js";
@@ -110,7 +112,8 @@ export class Agent {
     signal?: AbortSignal,
     onApproval?: (call: ToolCall) => Promise<boolean>,
     onText?: (delta: string) => void,
-    onReasoning?: (delta: string) => void
+    onReasoning?: (delta: string) => void,
+    onAskUser?: (payload: AskUserPayload) => Promise<AskUserResponse>
   ): Promise<AgentResponse> {
     if (!continueSession) {
       this.messages = [];
@@ -435,7 +438,7 @@ GUIDANCE FOR PLAN EXECUTION:
 
         const gate = new MutationGate();
         const pathMutex = new MutexMap();
-        const execContext = { sessionId: this.config.sessionId, cwd: process.cwd() };
+        const execContext = { sessionId: this.config.sessionId, cwd: process.cwd(), askUser: onAskUser };
 
         // Execution windows [startMs, endMs] per entry index, used to report
         // observed concurrency for this batch.

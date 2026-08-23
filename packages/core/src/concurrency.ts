@@ -108,6 +108,10 @@ export const BASH_LOCK = "__bash__";
  *  serialize them against every mutating built-in tool but let them run
  *  parallel to read-only tools. */
 export const MCP_LOCK = "__mcp__";
+/** Sentinel lock key for ask_user: two questionnaires would fight over the
+ *  same interactive modal, so concurrent ask_user calls serialize against
+ *  each other via the per-key mutex (shared gate — reads still run alongside). */
+export const ASK_USER_LOCK = "__ask_user__";
 
 /** Monotonic counter for unique fallback lock keys (malformed args). */
 let badArgsCounter = 0;
@@ -125,6 +129,7 @@ export function classifyLockKey(
   try {
     if (name === "bash") return BASH_LOCK;
     if (name.startsWith("mcp__")) return MCP_LOCK;
+    if (name === "ask_user") return ASK_USER_LOCK;
     if (name === "search_replace" || name === "insert_lines" || name === "write") {
       const p = parsedArgs?.path;
       if (typeof p === "string" && p.length > 0) return path.resolve(cwd, p);

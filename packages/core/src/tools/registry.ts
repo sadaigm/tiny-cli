@@ -1,8 +1,11 @@
 import { ToolDefinition } from '../types.js';
+import type { AskUserPayload, AskUserResponse } from '../types.js';
 
 export type ToolContext = {
   sessionId?: string;
   cwd?: string;
+  /** Interactive question channel (wired by Agent.run when the host provides onAskUser). */
+  askUser?: (payload: AskUserPayload) => Promise<AskUserResponse>;
 };
 
 export type ToolHandler = (args: any, context?: ToolContext) => Promise<string>;

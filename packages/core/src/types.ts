@@ -113,3 +113,26 @@ export interface Session {
   metadata: SessionMetadata;
   messages: Message[];
 }
+
+/** One multiple-choice question shown to the user. */
+export interface AskUserQuestion {
+  question: string;
+  options: string[];
+}
+
+/** Full questionnaire payload the ask_user tool sends to the UI. */
+export interface AskUserPayload {
+  context?: string;
+  questions: AskUserQuestion[];
+}
+
+/** One collected answer. */
+export interface AskUserAnswer {
+  question: string;
+  selected: string;
+}
+
+/** Result of showing the questionnaire to the user. */
+export type AskUserResponse =
+  | { kind: 'answered'; answers: AskUserAnswer[] }
+  | { kind: 'skipped' };
