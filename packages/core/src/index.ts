@@ -10,3 +10,4 @@ export * from './session.js';
 export * from './commands/registry.js';
 export * from './mcp/manager.js';
 export * from './instructions.js';
+export * from './compact_utils.js';

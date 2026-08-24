@@ -14,7 +14,6 @@ import { registerDefaultTools } from "./tools/definitions.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./prompts/default.js";
 import { AGENT_SYSTEM_PROMPT } from "./prompts/agent.js";
 import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
-import { getEncoding, type Tiktoken } from "js-tiktoken";
 import fs from "fs/promises";
 import path from "path";
 import { McpManager } from "./mcp/manager.js";
@@ -50,6 +49,14 @@ import {
 } from "./concurrency.js";
 import { loadSkills, renderSkillsXml } from "@tiny-cli/resources";
 import { logDebug } from "./logger.js";
+import {
+  DEFAULT_COMPACT_THRESHOLD,
+  TOOL_CALLS_PER_COMPACT_CHECK,
+  measureContext,
+  needsCompaction,
+  planCompaction,
+  buildCompactedHistory,
+} from "./compact_utils.js";
 
 export class Agent {
   private model: ModelClient;
@@ -57,6 +64,11 @@ export class Agent {
   private config: AgentConfig;
   private messages: Message[] = [];
   public mcpManager: McpManager;
+
+  /** Called after any message is appended to this.messages. */
+  onHistoryChange?: () => void;
+  /** Called when a compaction actually runs (before/after token counts). */
+  onCompaction?: (before: number, after: number) => void;
 
   constructor(config: AgentConfig) {
     this.config = config;
@@ -260,9 +272,15 @@ GUIDANCE FOR PLAN EXECUTION:
 
     this.messages.unshift({ role: "system", content: systemPrompt });
 
+    // Turn-start compaction: check before the new user message is appended,
+    // so the fresh query is never summarized away. No-op under threshold.
+    await this.compactMemoryIfNeeded(signal);
+
     this.messages.push({ role: "user", content: userInput });
+    this.onHistoryChange?.();
 
     const steps: AgentStep[] = [];
+    let toolCallCount = 0;
     let iteration = 0;
     const maxIterations = this.config.maxIterations || 25;
 
@@ -325,6 +343,7 @@ GUIDANCE FOR PLAN EXECUTION:
         content: response.content,
         tool_calls: response.tool_calls,
       });
+      this.onHistoryChange?.();
 
       // A streamed turn with no tool calls is final — the caller has
       // already seen every delta, so don't re-emit the full text.
@@ -608,9 +627,18 @@ GUIDANCE FOR PLAN EXECUTION:
             tool_call_id: call.id,
             content: result,
           });
+          toolCallCount++;
 
           if (onStep) onStep(step);
           steps.push(step);
+        }
+        this.onHistoryChange?.();
+
+        // Mid-turn safety valve: compact at a complete tool-round boundary
+        // every TOOL_CALLS_PER_COMPACT_CHECK tool calls, so a long agentic
+        // turn can't blow far past the threshold.
+        if (toolCallCount % TOOL_CALLS_PER_COMPACT_CHECK === 0) {
+          await this.compactMemoryIfNeeded(signal);
         }
 
         if (wasAborted) {
@@ -634,6 +662,7 @@ GUIDANCE FOR PLAN EXECUTION:
               content: result,
             });
           }
+          this.onHistoryChange?.();
           return { content: "Execution cancelled by user.", steps };
         }
       } else {
@@ -680,27 +709,7 @@ GUIDANCE FOR PLAN EXECUTION:
   }
 
   getContextStats() {
-    const encoder = getEncoding("cl100k_base");
-    let totalTokens = 0;
-    let totalChars = 0;
-
-    for (const m of this.messages) {
-      if (m.content) {
-        totalChars += m.content.length;
-        totalTokens += encoder.encode(m.content).length;
-      }
-      
-      if (m.tool_calls) {
-        const toolCallsStr = JSON.stringify(m.tool_calls);
-        totalChars += toolCallsStr.length;
-        totalTokens += encoder.encode(toolCallsStr).length;
-      }
-    }
-
-    return {
-      tokens: totalTokens,
-      characters: totalChars,
-    };
+    return measureContext(this.messages);
   }
 
   /**
@@ -718,7 +727,7 @@ GUIDANCE FOR PLAN EXECUTION:
   }
 
   private async compactMemoryIfNeeded(signal?: AbortSignal, force = false): Promise<number | null> {
-    const compactionThreshold = this.config.compactionThresholdTokens ?? 35000;
+    const compactionThreshold = this.config.compactionThresholdTokens ?? DEFAULT_COMPACT_THRESHOLD;
     const stats = this.getContextStats();
     if (!force && stats.tokens <= compactionThreshold) {
       return null;
@@ -728,61 +737,31 @@ GUIDANCE FOR PLAN EXECUTION:
       logDebug(`Context size (${stats.tokens} tokens) exceeds ${compactionThreshold.toLocaleString()}. Compacting memory...`);
     }
 
-    const systemMessages = this.messages.filter(m => m.role === 'system');
-    const nonSystemMessages = this.messages.filter(m => m.role !== 'system');
-
-    const encoder = getEncoding("cl100k_base");
-
-    let retainedTokens = 0;
-    const targetRetainedTokens = this.config.compactionRetainTokens ?? 8000;
-
-    let retainIndex = nonSystemMessages.length;
-    for (let i = nonSystemMessages.length - 1; i >= 0; i--) {
-      const m = nonSystemMessages[i];
-      let msgTokens = 0;
-      if (m.content) msgTokens += encoder.encode(m.content).length;
-      if (m.tool_calls) msgTokens += encoder.encode(JSON.stringify(m.tool_calls)).length;
-
-      if (retainedTokens + msgTokens > targetRetainedTokens) {
-        break;
-      }
-      retainedTokens += msgTokens;
-      retainIndex = i;
-    }
-
-    const messagesToSummarize = nonSystemMessages.slice(0, retainIndex);
-    const messagesToRetain = nonSystemMessages.slice(retainIndex);
-
-    if (messagesToSummarize.length === 0) {
+    const plan = planCompaction(this.messages, this.config);
+    if (!plan) {
       return null;
     }
 
     const summaryPrompt = "Summarize the following conversation history. IDENTIFY THE CURRENT ACTIVE TASK and the state of the implementation. Preserve all key technical decisions, file paths, completed tasks, and context. Do not omit any important technical details, errors, or findings.";
-    
+
     const summaryMessages: Message[] = [
-      ...systemMessages,
-      ...messagesToSummarize,
+      ...plan.system,
+      ...plan.summarize,
       { role: "user", content: summaryPrompt }
     ];
 
     try {
       const response = await this.model.chat(summaryMessages, [], signal);
-      
-      const summaryMessage: Message = {
-        role: "system",
-        content: `[PREVIOUS CONTEXT SUMMARY]\n${response.content}`
-      };
 
-      this.messages = [
-        ...systemMessages,
-        summaryMessage,
-        ...messagesToRetain
-      ];
+      this.messages = buildCompactedHistory(plan, response.content);
 
+      const after = this.getContextStats().tokens;
       if (!force) {
-        logDebug(`Memory compacted. New context size: ${this.getContextStats().tokens} tokens.\n`);
+        logDebug(`Memory compacted. New context size: ${after} tokens.\n`);
       }
-      return this.getContextStats().tokens;
+      this.onCompaction?.(stats.tokens, after);
+      this.onHistoryChange?.();
+      return after;
     } catch (err: any) {
       if (err.name === 'AbortError' || signal?.aborted) {
         // Aborted, do nothing

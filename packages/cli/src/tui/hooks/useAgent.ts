@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { Agent, AgentStep, SessionManager, ToolCall } from '@tiny-cli/core';
 import { logError } from '@tiny-cli/core';
 import type { AskUserPayload, AskUserResponse } from '@tiny-cli/core';
@@ -256,6 +256,30 @@ export function useAgent({
    * the React `agentState` state is updated separately for rendering.
    */
   const isRunningRef = useRef(false);
+
+  // ── Real-time context stats & visible compaction ────────────────
+
+  // Recompute stats after every message appended to the agent's history,
+  // and surface compactions as a system log line.
+  useEffect(() => {
+    agent.onHistoryChange = () => {
+      try {
+        setState({ contextStats: agent.getContextStats() });
+      } catch {
+        // ignore
+      }
+    };
+    agent.onCompaction = (before, after) => {
+      addLog({
+        type: 'system',
+        content: `Memory compacted: ${before.toLocaleString()} → ${after.toLocaleString()} tokens`,
+      });
+    };
+    return () => {
+      agent.onHistoryChange = undefined;
+      agent.onCompaction = undefined;
+    };
+  }, [agent, setState, addLog]);
 
   // ── Internal helpers ────────────────────────────────────────────
 

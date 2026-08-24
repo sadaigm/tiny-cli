@@ -1187,6 +1187,7 @@ export default function App({
           mode={state.mode}
           contextStats={state.contextStats}
           permissionMode={permissionMode}
+          compactThreshold={config_.compactionThresholdTokens}
         />
       </Box>
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
+import { DEFAULT_COMPACT_THRESHOLD } from '@tiny-cli/core';
 import type { TuiMode, ContextStats } from '../state.js';
 import { getTheme } from '../theme.js';
 
@@ -13,6 +14,12 @@ export interface StatusBarProps {
   contextStats: ContextStats;
   /** Current permission mode governing tool-call approval. */
   permissionMode: 'notify' | 'auto-edit' | 'auto';
+  /**
+   * Token budget the meter fills against — the configured compaction
+   * threshold (`compactionThresholdTokens`), falling back to the core
+   * default when unset.
+   */
+  compactThreshold?: number;
 }
 
 /**
@@ -46,19 +53,12 @@ const PERMISSION_LABELS: Record<StatusBarProps['permissionMode'], string> = {
 };
 
 /**
- * Token budget the meter fills against — the point where auto-compaction
- * kicks in (see `Agent.compactMemoryIfNeeded`). Must stay in sync with the
- * core constant.
- */
-const COMPACT_THRESHOLD = 35_000;
-
-/**
  * One-line usage meter: a 10-slot bar plus percent of the compaction
  * threshold. Colour ramps green → yellow (≥60%) → red (≥85%) so the
  * approach to compaction is visible at a glance.
  */
-function usageMeter(tokens: number): { bar: string; percent: number; color: string } {
-  const fraction = Math.min(1, tokens / COMPACT_THRESHOLD);
+function usageMeter(tokens: number, threshold: number): { bar: string; percent: number; color: string } {
+  const fraction = Math.min(1, tokens / threshold);
   const filled = Math.round(fraction * 10);
   const bar = `${'█'.repeat(filled)}${'░'.repeat(10 - filled)}`;
   return {
@@ -81,11 +81,11 @@ function usageMeter(tokens: number): { bar: string; percent: number; color: stri
  * <StatusBar mode={state.mode} contextStats={state.contextStats} permissionMode="notify" />
  * ```
  */
-function StatusBar({ mode, contextStats, permissionMode }: StatusBarProps): React.ReactElement {
+function StatusBar({ mode, contextStats, permissionMode, compactThreshold = DEFAULT_COMPACT_THRESHOLD }: StatusBarProps): React.ReactElement {
   // Token counts come from the model tokenizer's encoding (cl100k_base via
   // agent.getContextStats), not a chars/4 estimate — the meter is the real
   // budget the auto-compaction threshold acts on.
-  const meter = usageMeter(contextStats.tokens);
+  const meter = usageMeter(contextStats.tokens, compactThreshold);
   const theme = getTheme();
   return (
     // Left-packed single row — no space-between, so no full-width stretching gap.
