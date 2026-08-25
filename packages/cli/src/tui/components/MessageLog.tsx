@@ -13,6 +13,7 @@ import { Box, Text, useInput, useStdout } from 'ink';
 import type { LogEntry } from '../state.js';
 import MessageItem, { MAX_STANDARD_BODY_LINES } from './MessageItem.js';
 import { summarizeToolCall, summarizeToolResult } from '../utils/toolSummary.js';
+import { markdownToLines } from '../utils/markdown.js';
 import { copyToClipboard, entryClipboardText } from '../utils/clipboard.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
 import { useStreamStore } from './StreamProvider.js';
@@ -182,9 +183,11 @@ function wrappedLineCount(text: string, usable: number): number {
  * - tool_call / tool_result: 1 line when collapsed (summary); when
  *   expanded, 1 header line + the wrapped detail block from the same
  *   summarizer the renderer uses (same cap, same text).
- * - user / assistant: 1 header line + body lines wrapped at
- *   `columns - BODY_INDENT` (matching `wrapIndent`'s indent); collapsed
- *   bodies cap at MAX_STANDARD_BODY_LINES, expanded bodies do not.
+ * - user / assistant: 1 header line + the body laid out by
+ *   `markdownToLines(entry.content, usable)` — the SAME pure function
+ *   MessageItem renders through, so the estimator counts the exact MdLine
+ *   rows the renderer draws (markdown layout, word wrap, list/code rows).
+ *   Collapsed bodies cap at MAX_STANDARD_BODY_LINES, expanded do not.
  * - system / info / error: treated like a wrapped body line.
  */
 function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number): number {
@@ -207,11 +210,17 @@ function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, 
     if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
     return Math.max(1, 1 + bodyLines);
   }
-  // Count rendered lines: each explicit newline is its own line, plus
-  // soft-wrap for lines longer than the usable width. Collapsed standard
-  // entries cap at MAX_STANDARD_BODY_LINES (matching MessageItem's render).
+  // Count rendered lines: markdown layout for user/assistant (the same
+  // `markdownToLines` array MessageItem renders), `wrapIndent` chunk count
+  // for the plain entry types. Collapsed standard entries cap at
+  // MAX_STANDARD_BODY_LINES (matching MessageItem's render).
   // User/assistant messages are exempt — they render in full (see MessageItem).
-  const rawBodyLines = entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
+  const rawBodyLines =
+    entry.type === 'user' || entry.type === 'assistant'
+      ? markdownToLines(entry.content, usable).length
+      : entry.content.length === 0
+        ? 0
+        : wrappedLineCount(entry.content, usable);
   let bodyLines =
     expanded.has(entry.id) || entry.type === 'user' || entry.type === 'assistant'
       ? rawBodyLines
@@ -243,7 +252,11 @@ function renderedBodyLines(entry: LogEntry, columns: number, expanded: Set<strin
     return entry.live || expanded.has(entry.id) ? raw : Math.min(raw, 1);
   }
   if (entry.content.length === 0) return 0;
-  const raw = wrappedLineCount(entry.content, usable);
+  // User/assistant: the same markdownToLines array MessageItem renders.
+  const raw =
+    entry.type === 'user' || entry.type === 'assistant'
+      ? markdownToLines(entry.content, usable).length
+      : wrappedLineCount(entry.content, usable);
   // User/assistant messages render in full even when collapsed (see MessageItem).
   if (entry.type === 'user' || entry.type === 'assistant') return raw;
   return expanded.has(entry.id) ? raw : Math.min(raw, MAX_STANDARD_BODY_LINES);

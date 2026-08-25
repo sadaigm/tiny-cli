@@ -8,6 +8,8 @@ import {
   type ToolSummary,
 } from '../utils/toolSummary.js';
 import { splitLinks } from '../utils/links.js';
+import { markdownToLines } from '../utils/markdown.js';
+import MarkdownBody from './MarkdownBody.js';
 import { getTheme } from '../theme.js';
 
 /**
@@ -243,11 +245,33 @@ export default function MessageItem({
   const bodyColor =
     entry.type === 'error' ? 'red' : entry.type === 'system' || entry.type === 'info' ? 'gray' : entry.type === 'plan' ? color : undefined;
 
-  // Cap the body when collapsed so a single giant entry (e.g. a captured
-  // file dump or hydration log) can't dominate the pane and cause redraw
-  // flicker. The full text is shown only when expanded. User and assistant
-  // messages are exempt: both sides of the conversation must stay readable,
-  // collapsed or not.
+  // Markdown bodies (user/assistant): layout happens in the pure util —
+  // clipping is a line-array slice (lineOffset/maxLines index MdLines), so
+  // MessageLog's estimator counts the exact same rows it draws. Plain
+  // entries keep the wrapIndent-based path (see the branches above).
+  if (entry.type === 'user' || entry.type === 'assistant') {
+    const allLines = markdownToLines(entry.content, Math.max(1, columns - 3));
+    const bodyLines = maxLines === undefined ? allLines : allLines.slice(lineOffset, lineOffset + maxLines);
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text color={color}>
+            {marker}
+            {ICONS[entry.type]} {entry.type === 'user' ? 'You' : 'Agent'}:
+          </Text>
+          {entry.type === 'assistant' && timing ? <Text dimColor>{timing}</Text> : null}
+          {entry.queued ? <Text dimColor color="yellow"> (queued)</Text> : null}
+        </Box>
+        <Box marginLeft={3}>
+          <MarkdownBody lines={bodyLines} color={bodyColor} />
+        </Box>
+      </Box>
+    );
+  }
+
+  // Cap the body when collapsed so a giant entry (e.g. a captured file dump
+  // or hydration log) can't dominate the pane and cause redraw flicker.
+  // The full text is shown only when expanded.
   const fullBody = wrapIndent(entry.content, 3, columns);
   const fullLines = fullBody.split('\n');
   let body = clip(fullBody);
@@ -263,11 +287,8 @@ export default function MessageItem({
       <Box>
         <Text color={color}>
           {marker}
-          {ICONS[entry.type]} {entry.type === 'user' ? 'You' : entry.type === 'assistant' ? 'Agent' : ''}
-          {entry.type === 'user' || entry.type === 'assistant' ? ':' : ''}
+          {ICONS[entry.type]}{' '}
         </Text>
-        {entry.type === 'assistant' && timing ? <Text dimColor>{timing}</Text> : null}
-        {entry.queued ? <Text dimColor color="yellow"> (queued)</Text> : null}
         {hiddenHint ? <Text dimColor>{hiddenHint}</Text> : null}
       </Box>
       <Box marginLeft={3}>

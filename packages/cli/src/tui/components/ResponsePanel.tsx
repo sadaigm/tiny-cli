@@ -1,8 +1,8 @@
 import React, { useSyncExternalStore } from 'react';
 import { Box, Text } from 'ink';
-import { wrapIndent } from '../utils/toolSummary.js';
 import { useStreamStore } from './StreamProvider.js';
-import { renderBodyWithLinks } from './MessageItem.js';
+import MarkdownBody from './MarkdownBody.js';
+import { markdownToLines } from '../utils/markdown.js';
 import { getTheme } from '../theme.js';
 
 /**
@@ -15,6 +15,11 @@ import { getTheme } from '../theme.js';
  * read the agent's words as they arrive. The surrounding log pane is
  * already height-capped by {@link MessageLog}, so a long response scrolls
  * within the pane instead of growing the layout.
+ *
+ * Markdown renders through the same {@link markdownToLines} layout the
+ * committed entries use; no streaming special-casing — every delta re-runs
+ * the pure function, and unterminated markers render literally until the
+ * closing marker arrives.
  */
 export default function ResponsePanel({ columns = 80 }: { columns?: number }): React.ReactElement | null {
   const store = useStreamStore();
@@ -22,14 +27,16 @@ export default function ResponsePanel({ columns = 80 }: { columns?: number }): R
   if (!section.active || !section.text) return null;
 
   const theme = getTheme();
-  const body = wrapIndent(section.text, 3, columns);
+  const lines = markdownToLines(section.text, Math.max(1, columns - 3));
 
   return (
     <Box flexDirection="column">
       <Box>
         <Text color={theme.assistant}>  🤖 Agent:</Text>
       </Box>
-      <Box marginLeft={3}>{renderBodyWithLinks(body, undefined)}</Box>
+      <Box marginLeft={3}>
+        <MarkdownBody lines={lines} color={undefined} />
+      </Box>
     </Box>
   );
 }
