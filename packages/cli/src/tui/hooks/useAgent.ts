@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
-import type { Agent, AgentStep, SessionManager, ToolCall } from '@tiny-cli/core';
+import type { Agent, AgentStep, ToolCall } from '@tiny-cli/core';
+import { SessionManager } from '@tiny-cli/core';
 import { logError } from '@tiny-cli/core';
 import type { AskUserPayload, AskUserResponse } from '@tiny-cli/core';
 import type { StreamStore } from '../streamStore.js';
@@ -275,9 +276,16 @@ export function useAgent({
         content: `Memory compacted: ${before.toLocaleString()} → ${after.toLocaleString()} tokens`,
       });
     };
+    agent.onModelError = (err) => {
+      addLog({
+        type: 'error',
+        content: `Model request failed: ${err.message} — continuing`,
+      });
+    };
     return () => {
       agent.onHistoryChange = undefined;
       agent.onCompaction = undefined;
+      agent.onModelError = undefined;
     };
   }, [agent, setState, addLog]);
 
@@ -289,12 +297,15 @@ export function useAgent({
   const saveSession = useCallback(async (): Promise<void> => {
     try {
       const messages = agent.getHistory();
-      const session = await sessionManager.loadSession(sessionId);
-      if (session) {
-        session.messages = messages;
-        session.metadata.lastUpdatedAt = new Date().toISOString();
-        await sessionManager.saveSession(session);
-      }
+      // Create-on-first-save: if the file doesn't exist yet (startup no
+      // longer pre-writes an empty one), persist instead of silently
+      // dropping the whole conversation.
+      const session =
+        (await sessionManager.loadSession(sessionId)) ??
+        SessionManager.createSession(sessionId);
+      session.messages = messages;
+      session.metadata.lastUpdatedAt = new Date().toISOString();
+      await sessionManager.saveSession(session);
     } catch {
       // Session save failure is non-fatal
     }
@@ -687,7 +698,8 @@ export function useAgent({
         return;
       }
 
-      const tasks = parseIncompleteTasks(await readPlanTaskFile(sessionId));
+      let taskFileContent = await readPlanTaskFile(sessionId);
+      const tasks = parseIncompleteTasks(taskFileContent);
       if (tasks.length === 0) {
         addLog({
           type: 'system',
@@ -709,6 +721,16 @@ export function useAgent({
       for (let i = 0; i < tasks.length; i++) {
         if (abortExecution) break;
         const task = tasks[i];
+        // A previous turn may have batch-completed later tasks (execution
+        // prompt allows one mark_task_complete per finished task) — skip
+        // those without burning an agent turn on them.
+        if (isTaskMarkedComplete(taskFileContent, task.text)) {
+          addLog({
+            type: 'system',
+            content: `Task ${i + 1}/${tasks.length} already completed — skipping.`,
+          });
+          continue;
+        }
         addLog({
           type: 'plan',
           content: `[Executing Task ${i + 1}/${tasks.length}] ${task.text}`,
@@ -731,7 +753,9 @@ ${planContent}
 CRITICAL INSTRUCTIONS:
 1. When you have successfully implemented and verified the task, you MUST call the 'mark_task_complete' tool.
 2. If you do not call 'mark_task_complete', the task will be marked as FAILED or INCOMPLETE.
-3. Only call 'mark_task_complete' if the code is actually written and tested.`;
+3. Only call 'mark_task_complete' if the code is actually written and tested.
+4. If finishing this task also fully completes the next small task(s) in the plan, call 'mark_task_complete' for each of those too — do not leave trivial follow-up tasks for later turns.
+5. Do NOT execute tests, builds, or dev servers for this task — WRITE tests alongside the code only. Test execution happens once, in the plan's final verification task (or manually by the user). Exception: if this IS the final verification task, run the full suite now and fix failures.`;
 
           // Run the agent turn (fire-and-forget but we await inside this IIFE)
           await runAgentTurn(
@@ -746,8 +770,8 @@ CRITICAL INSTRUCTIONS:
           }
 
           // Re-read the task file to check if task was marked complete
-          const updatedContent = await readPlanTaskFile(sessionId);
-          const isComplete = isTaskMarkedComplete(updatedContent, task.text);
+          taskFileContent = await readPlanTaskFile(sessionId);
+          const isComplete = isTaskMarkedComplete(taskFileContent, task.text);
 
           if (isComplete) {
             addLog({
@@ -781,6 +805,7 @@ CRITICAL INSTRUCTIONS:
                   task.text,
                 );
                 await writePlanTaskFile(sessionId, manualContent);
+                taskFileContent = manualContent;
                 addLog({
                   type: 'plan',
                   content: `Task ${i + 1}/${tasks.length} marked as done manually.`,

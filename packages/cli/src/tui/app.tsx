@@ -294,6 +294,33 @@ export default function App({
     dispatch({ type: 'ADD_LOG', entry: { type: 'error', content } });
   }, []);
 
+  /**
+   * Replay persisted session messages into the transcript log. Compaction
+   * summaries surface as a system entry, tool-only assistant messages (no
+   * text content) as compact tool markers — otherwise a compacted session
+   * loads as a wall of empty agent bubbles.
+   */
+  const replaySessionMessages = useCallback(
+    (messages: Session['messages']) => {
+      for (const m of messages) {
+        const text = typeof m.content === 'string' ? m.content : '';
+        if (m.role === 'system') {
+          if (text.startsWith('[PREVIOUS CONTEXT SUMMARY]')) {
+            const summary = text.slice('[PREVIOUS CONTEXT SUMMARY]'.length).trim();
+            addSystemLog(`📋 Previous context (compacted): ${summary.slice(0, 200)}${summary.length > 200 ? '…' : ''}`);
+          }
+        } else if (m.role === 'assistant' && !text.trim() && m.tool_calls?.length) {
+          for (const call of m.tool_calls) {
+            addSystemLog(`🔧 ${call.function.name}`);
+          }
+        } else if ((m.role === 'user' || m.role === 'assistant') && text.trim()) {
+          addLog({ type: m.role, content: text });
+        }
+      }
+    },
+    [addLog, addSystemLog]
+  );
+
   // ── Console capture ──
   useConsoleCapture((entry) => {
     dispatch({ type: 'ADD_LOG', entry });
@@ -554,11 +581,7 @@ export default function App({
               dispatch({ type: 'SET_SESSION_ID', sessionId: id });
               dispatch({ type: 'CLEAR_LOG' });
               addSystemLog(`Loaded session: ${id}`);
-              for (const m of newSession.messages) {
-                if (m.role === 'user' || m.role === 'assistant') {
-                  addLog({ type: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) });
-                }
-              }
+              replaySessionMessages(newSession.messages);
             } else {
               addErrorLog(`Session not found: ${id}`);
             }
@@ -581,21 +604,30 @@ export default function App({
             addSystemLog('No saved sessions found. Use /session new to create one.');
             return true;
           }
-          const sessionItems = await Promise.all(
-            sessions.map(async (s) => {
-              // First user message makes the session recognisable in the list.
-              const full = await sessionManager.loadSession(s.id);
-              const firstUser = full?.messages.find((m) => m.role === 'user' && m.content);
-              const preview =
-                (firstUser?.content as string | undefined)?.replace(/\s+/g, ' ').trim().slice(0, 60) ||
-                '(empty)';
-              return {
-                label: preview,
-                value: s.id,
-                description: `${relativeTime(s.lastUpdatedAt)} · ${s.id.slice(0, 8)}`,
-              };
-            }),
-          );
+          const sessionItems = (
+            await Promise.all(
+              sessions.map(async (s) => {
+                // First user message makes the session recognisable in the list.
+                const full = await sessionManager.loadSession(s.id);
+                // Blank sessions (nothing ever said) are unloadable noise —
+                // loading one shows an empty log. Keep them out of the list.
+                if (!full || full.messages.length === 0) return null;
+                const firstUser = full.messages.find((m) => m.role === 'user' && m.content);
+                const preview =
+                  (firstUser?.content as string | undefined)?.replace(/\s+/g, ' ').trim().slice(0, 60) ||
+                  '(no user message)';
+                return {
+                  label: preview,
+                  value: s.id,
+                  description: `${relativeTime(s.lastUpdatedAt)} · ${s.id.slice(0, 8)}`,
+                };
+              }),
+            )
+          ).filter((item): item is { label: string; value: string; description: string } => item !== null);
+          if (sessionItems.length === 0) {
+            addSystemLog('No sessions with messages found. Use /session new to create one.');
+            return true;
+          }
           dispatch({
             type: 'OPEN_SELECTOR',
             selector: {
@@ -629,13 +661,16 @@ export default function App({
                 },
               });
             }
-            addSystemLog('Select a server to reconnect (or use /mcp reconnect|disconnect|tools <name>).');
+            addSystemLog('Select a server to manage (or use /mcp reconnect|disconnect|tools <name>).');
             dispatch({
               type: 'OPEN_SELECTOR',
               selector: {
                 kind: 'mcp',
-                title: 'Select MCP Server to Reconnect',
-                items: servers.map((s) => s.name),
+                title: 'Select MCP Server',
+                items: servers.map((s) => ({
+                  label: `${s.name} (${agent.mcpManager.getStatus(s.name)}, ${agent.mcpManager.getTools(s.name).length} tools)`,
+                  value: s.name,
+                })),
                 selectedIndex: 0,
               },
             });
@@ -728,7 +763,8 @@ export default function App({
             if (after === null) {
               addSystemLog('Nothing to compact — recent history already fits the retention budget.');
             } else {
-              addSystemLog(`Memory compacted: ${before.toLocaleString()} → ${after.toLocaleString()} tokens.`);
+              // The result line is logged by the onCompaction subscription
+              // in useAgent — don't log it twice.
               await sessionManager.saveSession(session);
             }
           } catch (err: any) {
@@ -906,28 +942,53 @@ export default function App({
             dispatch({ type: 'SET_SESSION_ID', sessionId: chosen });
             dispatch({ type: 'CLEAR_LOG' });
             addSystemLog(`Loaded session: ${chosen}`);
-            for (const m of newSession.messages) {
-              if (m.role === 'user' || m.role === 'assistant') {
-                addLog({ type: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) });
-              }
-            }
+            replaySessionMessages(newSession.messages);
           } else {
             addErrorLog(`Session not found: ${chosen}`);
           }
           break;
         }
         case 'mcp': {
-          const srv = (agent.getConfig().mcpServers || []).find((s) => s.name === chosen);
-          if (srv) {
-            addSystemLog(`Reconnecting to ${chosen}...`);
-            try {
-              await agent.mcpManager.reconnect(srv);
-              addSystemLog(`Reconnected to ${chosen}.`);
-            } catch (err: any) {
-              addErrorLog(`Failed to reconnect to ${chosen}: ${err.message}`);
+          // Second level: pick an action for the chosen server (mirrors the
+          // old REPL's inquirer two-step /mcp flow).
+          dispatch({
+            type: 'OPEN_SELECTOR',
+            selector: {
+              kind: 'mcp-action',
+              title: `Action for ${chosen}`,
+              items: ['Reconnect', 'Disconnect', 'List tools'],
+              selectedIndex: 0,
+              context: chosen,
+            },
+          });
+          break;
+        }
+        case 'mcp-action': {
+          const name = sel.context;
+          if (!name) break;
+          if (chosen === 'Reconnect') {
+            const srv = (agent.getConfig().mcpServers || []).find((s) => s.name === name);
+            if (srv) {
+              addSystemLog(`Reconnecting to ${name}...`);
+              try {
+                await agent.mcpManager.reconnect(srv);
+                addSystemLog(`Reconnected to ${name}.`);
+              } catch (err: any) {
+                addErrorLog(`Failed to reconnect to ${name}: ${err.message}`);
+              }
             }
-          } else {
-            addErrorLog(`MCP server not found: ${chosen}`);
+          } else if (chosen === 'Disconnect') {
+            await agent.mcpManager.disconnect(name);
+            addSystemLog(`Disconnected ${name}.`);
+          } else if (chosen === 'List tools') {
+            const tools = agent.mcpManager.getTools(name);
+            addSystemLog(`Tools for ${name}:`);
+            if (tools.length === 0) {
+              dispatch({ type: 'ADD_LOG', entry: { type: 'info', content: '  No tools found or server disconnected.' } });
+            }
+            for (const t of tools) {
+              dispatch({ type: 'ADD_LOG', entry: { type: 'info', content: `  ${t.definition.name}` } });
+            }
           }
           break;
         }

@@ -55,8 +55,10 @@ Examples:
       let session = await sessionManager.loadSession(currentSessionId);
 
       if (!session) {
+        // In-memory only — the file is written on the first real save
+        // (useAgent.saveSession). Pre-writing an empty file here littered
+        // .tiny-cli/sessions with blank sessions every TUI launch.
         session = SessionManager.createSession(currentSessionId);
-        await sessionManager.saveSession(session);
       }
 
       agent.setSessionId(currentSessionId);
