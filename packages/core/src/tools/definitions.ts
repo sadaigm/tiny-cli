@@ -332,7 +332,13 @@ export function registerDefaultTools(registry: ToolRegistry) {
     // keeps us out of node_modules/dist noise. We pass args via execFile-style
     // array to avoid shell-quoting bugs in the pattern/path.
     return new Promise((resolve) => {
-      const child = execFile('grep', ['-rInE', '--include=*.{ts,tsx,js,jsx,json,md}', args.pattern, fullPath], (err, stdout, stderr) => {
+      // NOTE: execFile passes args verbatim (no shell), so brace expansion
+      // like '*.{ts,tsx}' never expands — grep treats it as a literal glob
+      // that matches nothing. Each extension needs its own --include flag.
+      const includes = ['ts', 'tsx', 'js', 'jsx', 'json', 'md'].map(
+        (ext) => `--include=*.${ext}`,
+      );
+      const child = execFile('grep', ['-rInE', ...includes, args.pattern, fullPath], (err, stdout, stderr) => {
         // grep exits 1 when there are NO matches — that is success, not an error.
         if (err && (err as any).code === 1 && !stderr) {
           resolve('No matches found.');
