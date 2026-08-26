@@ -7,7 +7,9 @@ tiny-cli-desktop/
 dist
 build
 logs
+*.log
 .DS_Store
+.idea/
 *.tsbuildinfo
 # context.md
 # design.md
