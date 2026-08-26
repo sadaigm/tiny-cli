@@ -44,6 +44,12 @@ export interface AgentConfig {
   model: string;
   temperature?: number;
   systemPrompt?: string;
+  /** Per-mode system-prompt overrides; unset modes fall back to the built-in prompts. */
+  prompts?: {
+    agent?: string;
+    chat?: string;
+    plan?: string;
+  };
   insecure?: boolean;
   alwaysWrite?: boolean;
   lastSessionId?: string;

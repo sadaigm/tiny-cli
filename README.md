@@ -300,7 +300,11 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
   "model": "llama3.2:latest",
   "description": "Default local assistant (Ollama)",
   "temperature": 0.7,
-  "systemPrompt": "...",
+  "prompts": {
+    "agent": "Optional override for agent-mode system prompt",
+    "chat": "Optional override for chat-mode system prompt",
+    "plan": "Optional override for plan-mode system prompt"
+  },
   "permissionMode": "notify",
   "logLevel": "LOG",
   "maxIterations": 50,
@@ -334,7 +338,10 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
 |:---|:---|:---|
 | `model` | Model identifier (e.g. `llama3.2:latest`) | `llama3.2:latest` |
 | `temperature` | Sampling temperature | `0.7` |
-| `systemPrompt` | Override the default system prompt | Built-in default |
+| `systemPrompt` | Unused — kept for backward compatibility; use `prompts` instead | *(ignored)* |
+| `prompts.agent` | Override the agent-mode system prompt | Built-in default |
+| `prompts.chat` | Override the chat-mode system prompt | Built-in default |
+| `prompts.plan` | Override the plan-mode (planning) system prompt | Built-in default |
 | `permissionMode` | `notify` (ask), `auto-edit` (auto files, ask bash), `auto` (no prompts) | `notify` |
 | `logLevel` | `TRACE`, `DEBUG`, `LOG`, `ERROR` | `LOG` |
 | `maxIterations` | Max agent loop iterations per query | Unlimited |

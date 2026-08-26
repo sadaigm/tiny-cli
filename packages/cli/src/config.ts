@@ -19,6 +19,12 @@ interface AgentProfile {
   model: string;
   description?: string;
   systemPrompt?: string;
+  /** Per-mode system-prompt overrides; unset modes use the built-in prompts. */
+  prompts?: {
+    agent?: string;
+    chat?: string;
+    plan?: string;
+  };
   temperature?: number;
   permissionMode?: PermissionMode;
   logLevel?: LogLevel;
@@ -90,6 +96,7 @@ export async function loadConfig(): Promise<AgentConfig> {
           model: profile.model,
           temperature: profile.temperature,
           systemPrompt: profile.systemPrompt,
+          prompts: profile.prompts,
           apiKey: env?.apiKey,
           insecure: insecure,
           mcpServers: profile.mcpServers,

@@ -69,6 +69,8 @@ export class Agent {
   onHistoryChange?: () => void;
   /** Called when a compaction actually runs (before/after token counts). */
   onCompaction?: (before: number, after: number) => void;
+  /** Called when a model request fails mid-turn; the turn continues. */
+  onModelError?: (error: Error) => void;
 
   constructor(config: AgentConfig) {
     this.config = config;
@@ -141,11 +143,11 @@ export class Agent {
 
     let systemPrompt: string;
     if (mode === 'plan') {
-      systemPrompt = PLANNING_SYSTEM_PROMPT;
+      systemPrompt = this.config.prompts?.plan ?? PLANNING_SYSTEM_PROMPT;
     } else if (mode === 'chat') {
-      systemPrompt = DEFAULT_SYSTEM_PROMPT;
+      systemPrompt = this.config.prompts?.chat ?? DEFAULT_SYSTEM_PROMPT;
     } else {
-      systemPrompt = AGENT_SYSTEM_PROMPT;
+      systemPrompt = this.config.prompts?.agent ?? AGENT_SYSTEM_PROMPT;
     }
 
     // Replace template variables
@@ -283,6 +285,7 @@ GUIDANCE FOR PLAN EXECUTION:
     let toolCallCount = 0;
     let iteration = 0;
     const maxIterations = this.config.maxIterations || 25;
+    let consecutiveModelErrors = 0;
 
     while (iteration < maxIterations) {
       if (signal?.aborted) {
@@ -334,8 +337,17 @@ GUIDANCE FOR PLAN EXECUTION:
           // Fetch aborted but not by the user → request timeout.
           return { content: `Request timed out after ${((this.config.requestTimeoutMs ?? 120_000) / 1000).toFixed(0)}s. Increase requestTimeoutMs in config or use a faster model.`, steps };
         }
-        throw error;
+        // Surface the failure to the user and keep the turn alive — the
+        // next iteration re-attempts the request (covers transient provider
+        // errors). Give up once failures repeat consecutively so a
+        // persistently broken request can't loop forever.
+        consecutiveModelErrors++;
+        this.onModelError?.(error);
+        logDebug(`Model request failed (attempt ${consecutiveModelErrors}): ${error.message}`);
+        if (consecutiveModelErrors >= 3) throw error;
+        continue;
       }
+      consecutiveModelErrors = 0;
       const modelChatMs = performance.now() - modelStart;
 
       this.messages.push({
