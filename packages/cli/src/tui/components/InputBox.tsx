@@ -164,9 +164,11 @@ function InputBox({
   const replaceValue = useCallback((next: string) => {
     historyRef.current.saveDraft(next);
     setValue(next);
-    // Route through handleChange so `/` and `@` pickers react to a recalled
-    // line the same way they react to typing it.
-    handleChangeRef.current?.(next);
+    // Deliberately NOT routed through handleChange: a recalled `/cmd` or
+    // `@file` line must not open its picker, or the picker would steal ↑/↓
+    // and history navigation would stop after the first recall.
+    setSlashActive(false);
+    setMentionActive(false);
   }, []);
 
   // --- paste chips ---------------------------------------------------------

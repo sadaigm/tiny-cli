@@ -138,7 +138,8 @@ export class McpManager {
       return;
     }
 
-    if (cfg.type === 'http') {
+    // 'streamable-http' (and legacy 'sse') configs use the same HTTP flow.
+    if (cfg.type === 'http' || cfg.type === 'streamable-http' || cfg.type === 'sse') {
       const url = new URL(cfg.url!);
       try {
         const client = new Client({ name: 'tiny-cli', version: '1.0.0' });
@@ -156,7 +157,10 @@ export class McpManager {
         this.transports.set(cfg.name, transport);
         await this.loadTools(cfg.name, client);
       }
+      return;
     }
+
+    throw new Error(`Unsupported MCP server type: ${cfg.type}`);
   }
 
   private async loadTools(serverName: string, client: Client): Promise<void> {

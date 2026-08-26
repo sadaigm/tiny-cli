@@ -27,7 +27,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'session', description: 'List, load, or create a session' },
   { name: 'mcp', description: 'Manage MCP server connections' },
   { name: 'continue', description: 'Continue executing the active plan' },
-  { name: 'find', description: 'Search messages and jump to matches' },
+  { name: 'find', description: 'Search messages and jump to matches (/find <text>)', takesArgs: true },
   { name: 'queue', description: 'Show queued messages (/queue clear drops them)' },
   { name: 'clear', description: 'Clear conversation history' },
   { name: 'compact', description: 'Summarize old history to shrink context now' },

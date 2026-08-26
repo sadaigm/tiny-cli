@@ -67,7 +67,7 @@ export interface ContextStats {
  * - `mode`     — choose a permission mode (notify/auto-edit/auto).
  * - `session`  — choose a saved session to load.
  */
-export type SelectorKind = 'model' | 'mode' | 'session' | 'mcp' | 'skill';
+export type SelectorKind = 'model' | 'mode' | 'session' | 'mcp' | 'mcp-action' | 'skill';
 
 /**
  * State for the inline AutocompletePopover overlay used by
@@ -85,6 +85,8 @@ export interface PendingSelector {
   items: AutocompleteItem[];
   /** Zero-based index of the currently highlighted item. */
   selectedIndex: number;
+  /** Extra context for the accept handler (e.g. server name for 'mcp-action'). */
+  context?: string;
 }
 
 /**
