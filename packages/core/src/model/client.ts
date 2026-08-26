@@ -87,6 +87,7 @@ export class ModelClient {
     if (!response.ok) {
       const errorText = await response.text();
       logTrace(`chat() — API error (${response.status}): ${errorText.slice(0, 200)}`);
+      logTrace(`chat() — failed request payload: ${JSON.stringify(payload)}`);
       throw new Error(`Model API error (${response.status}): ${errorText}`);
     }
 
@@ -140,6 +141,7 @@ export class ModelClient {
 
     if (!response.ok || !response.body) {
       logTrace(`chatStreamed() — HTTP ${response.status} after ${Date.now() - callStart}ms`);
+      logTrace(`chatStreamed() — failed request payload: ${JSON.stringify(payload)}`);
       throw new Error(`Model stream error: ${response.statusText}`);
     }
     logTrace(`chatStreamed() — stream open after ${Date.now() - callStart}ms, consuming deltas…`);
