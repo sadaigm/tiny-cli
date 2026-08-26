@@ -65,6 +65,14 @@ export function planCompaction(messages: Message[], config: AgentConfig): Compac
     retainIndex = i;
   }
 
+  // Never start the retained window with a tool result: its parent assistant
+  // tool_calls message would land in `summarize`, leaving an orphaned tool
+  // message that APIs reject ("The messages parameter is illegal"). Push such
+  // results into the summarized set instead — their content feeds the summary.
+  while (retainIndex < nonSystem.length && nonSystem[retainIndex].role === 'tool') {
+    retainIndex++;
+  }
+
   const summarize = nonSystem.slice(0, retainIndex);
   if (summarize.length === 0) {
     return null;

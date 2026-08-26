@@ -62,6 +62,31 @@ describe('compact_utils', () => {
       expect(plan.summarize.length).toBe(2);
       expect(plan.retain).toEqual([{ role: 'user', content: 'recent question' }]);
     });
+
+    it('never starts the retained window with a tool message', () => {
+      // Retention budget lands between a big tool-calling assistant and its
+      // tool result — the naive cut orphans the result, which APIs reject.
+      const msgs: Message[] = [
+        { role: 'system', content: 'sys' },
+        bigMessage('q', 2000),
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'read', arguments: JSON.stringify({ path: 'x'.repeat(4000) }) },
+          } as any],
+        },
+        { role: 'tool', tool_call_id: 'call_1', content: 'tool result' } as any,
+        { role: 'assistant', content: 'done' },
+      ];
+      const plan = planCompaction(msgs, { compactionRetainTokens: 50 } as any)!;
+      expect(plan).not.toBeNull();
+      // The orphaned result is summarized alongside its parent assistant turn
+      expect(plan.summarize.map(m => m.role)).toEqual(['user', 'assistant', 'tool']);
+      expect(plan.retain).toEqual([{ role: 'assistant', content: 'done' }]);
+    });
   });
 
   describe('buildCompactedHistory', () => {
