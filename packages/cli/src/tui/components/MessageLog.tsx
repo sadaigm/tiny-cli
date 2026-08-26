@@ -91,7 +91,7 @@ type LogViewAction =
   | { type: 'FOCUS_ABS'; index: number; length: number; rearm?: boolean }
   | { type: 'SCROLL_LINE'; offset: number }
   | { type: 'TOGGLE_EXPAND'; id: string }
-  | { type: 'RECONCILE'; length: number }
+  | { type: 'RECONCILE'; length: number; rearm?: boolean }
   | { type: 'RUNNING_CHANGE'; running: boolean; entries?: LogEntry[] };
 
 function createLogView(length: number): LogView {
@@ -132,8 +132,8 @@ function logViewReducer(state: LogView, action: LogViewAction): LogView {
       // New entries arrived (or log cleared). Clamp focus; auto-follow pins to tail.
       if (action.length === 0) return createLogView(0);
       const max = action.length - 1;
-      const focusIndex = state.autoFollow ? max : clamp(state.focusIndex, 0, max);
-      return { ...state, focusIndex };
+      const focusIndex = state.autoFollow || (action.rearm ?? false) ? max : clamp(state.focusIndex, 0, max);
+      return { ...state, focusIndex, autoFollow: state.autoFollow || (action.rearm ?? false) };
     }
     case 'RUNNING_CHANGE': {
       // When the agent turn ends, reasoning entries that streamed live
@@ -394,11 +394,16 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     return () => clearTimeout(t);
   }, [yankStatus]);
 
-  // Reconcile focus when the entry list grows / shrinks.
+  // Reconcile focus when the entry list grows / shrinks. When the newly
+  // appended entries contain a user message (sent or drained from the
+  // queue), re-arm auto-follow: sending a message is intent to watch the
+  // conversation again, even if the user had scrolled up to read history.
   const prevLengthRef = useRef(entries.length);
   useEffect(() => {
     if (entries.length !== prevLengthRef.current) {
-      dispatch({ type: 'RECONCILE', length: entries.length });
+      const grew = entries.length > prevLengthRef.current;
+      const rearm = grew && entries.slice(prevLengthRef.current).some((e) => e.type === 'user');
+      dispatch({ type: 'RECONCILE', length: entries.length, rearm });
       prevLengthRef.current = entries.length;
     }
   }, [entries.length]);

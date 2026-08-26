@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
+import { basename } from 'node:path';
 import { DEFAULT_COMPACT_THRESHOLD } from '@tiny-cli/core';
 import type { TuiMode, ContextStats } from '../state.js';
 import { getTheme } from '../theme.js';
@@ -20,6 +21,8 @@ export interface StatusBarProps {
    * default when unset.
    */
   compactThreshold?: number;
+  /** Working directory — only the folder name is shown. */
+  cwd: string;
 }
 
 /**
@@ -81,7 +84,7 @@ function usageMeter(tokens: number, threshold: number): { bar: string; percent: 
  * <StatusBar mode={state.mode} contextStats={state.contextStats} permissionMode="notify" />
  * ```
  */
-function StatusBar({ mode, contextStats, permissionMode, compactThreshold = DEFAULT_COMPACT_THRESHOLD }: StatusBarProps): React.ReactElement {
+function StatusBar({ mode, contextStats, permissionMode, compactThreshold = DEFAULT_COMPACT_THRESHOLD, cwd }: StatusBarProps): React.ReactElement {
   // Token counts come from the model tokenizer's encoding (cl100k_base via
   // agent.getContextStats), not a chars/4 estimate — the meter is the real
   // budget the auto-compaction threshold acts on.
@@ -93,6 +96,8 @@ function StatusBar({ mode, contextStats, permissionMode, compactThreshold = DEFA
       <Text color={theme.accent} bold>
         [{mode}]
       </Text>
+      <Text>  </Text>
+      <Text color={theme.system}>📁 {basename(cwd)}</Text>
       <Text>  </Text>
       <Text color={theme.system}>
         🧠 {formatTokens(contextStats.tokens)} tok{' '}

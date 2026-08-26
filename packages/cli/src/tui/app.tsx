@@ -845,6 +845,11 @@ export default function App({
         return;
       }
 
+      // Sending a message is intent to follow the conversation again —
+      // re-arm auto-follow so responses land in view even if the user had
+      // scrolled up to read earlier history.
+      paneRef.current?.focusBottom();
+
       // Hydrate @file mentions then submit. The hydrated text (with
       // <file> blocks) goes to the model; the original text (with @path
       // mentions) is what gets displayed in the log.
@@ -856,7 +861,7 @@ export default function App({
         agentApi.submitMessage(text, display);
       }
     },
-    [handleSlashCommand, agentApi],
+    [handleSlashCommand, agentApi, paneRef],
   );
 
   // ── Selector overlay: accept / dismiss ──
@@ -1188,6 +1193,7 @@ export default function App({
           contextStats={state.contextStats}
           permissionMode={permissionMode}
           compactThreshold={config_.compactionThresholdTokens}
+          cwd={process.cwd()}
         />
       </Box>
 
