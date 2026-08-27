@@ -487,6 +487,27 @@ export default function App({
           return true;
         }
 
+        case 'usage': {
+          const { tools: counts, redirects } = agent.getToolUsageStats();
+          const toolEntries = Object.entries(counts);
+          const redirectEntries = Object.entries(redirects);
+          if (toolEntries.length === 0 && redirectEntries.length === 0) {
+            addSystemLog('No tool calls recorded yet this session.');
+            return true;
+          }
+          addSystemLog(`Tool calls this session (${toolEntries.reduce((s, [, n]) => s + n, 0)} total):`);
+          for (const [name, n] of toolEntries) {
+            dispatch({ type: 'ADD_LOG', entry: { type: 'info', content: `  ${name}: ${n}` } });
+          }
+          if (redirectEntries.length > 0) {
+            addSystemLog('Bash commands redirected to dedicated tools:');
+            for (const [key, n] of redirectEntries) {
+              dispatch({ type: 'ADD_LOG', entry: { type: 'info', content: `  ${key}: ${n}` } });
+            }
+          }
+          return true;
+        }
+
         case 'model': {
           // Use the pure fetchModels() from handlers.ts
           const c = agent.getConfig();

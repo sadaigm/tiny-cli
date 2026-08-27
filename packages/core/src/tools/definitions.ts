@@ -3,7 +3,9 @@ import * as fs from 'fs';
 import { readFile, writeFile, readdir, mkdir } from 'fs/promises';
 import path from 'path';
 import { ToolDefinition } from '../types.js';
+import { logDebug } from '../logger.js';
 import { ToolRegistry } from './registry.js';
+import { checkBashRedirect, recordRedirectCount } from './bashRedirect.js';
 
 /**
  * fs.promises.glob (Node >=22) is present at runtime but absent from
@@ -20,6 +22,29 @@ async function collectGlob(pattern: string, cwd: string): Promise<string[]> {
   return out;
 }
 
+/** grep tool: extensions searched by default (noise control — lockfiles,
+ *  assets and vendored code stay out of results unless opted in). */
+const GREP_EXTENSIONS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'md', 'py', 'sh', 'css', 'scss', 'html', 'yaml', 'yml'];
+/** grep tool: directories skipped by default. */
+const GREP_EXCLUDE_DIRS = ['node_modules', 'dist', '.git'];
+
+/**
+ * Build the execFile argv for the grep tool. Pure so tests can assert the
+ * filtering behavior without shelling out. -E = extended regex (the model
+ * emits alternation '|', which is only valid in ERE); -I skips binary files;
+ * -r recurses (and makes a single-file target just search that file).
+ * execFile passes args verbatim (no shell), so brace expansion like
+ * '*.{ts,tsx}' never expands — each extension needs its own --include flag.
+ */
+export function buildGrepArgs(pattern: string, target: string, includeExcluded?: boolean): string[] {
+  if (includeExcluded) {
+    return ['-rInE', pattern, target];
+  }
+  const includes = GREP_EXTENSIONS.map((ext) => `--include=*.${ext}`);
+  const excludes = GREP_EXCLUDE_DIRS.map((d) => `--exclude-dir=${d}`);
+  return ['-rInE', ...excludes, ...includes, pattern, target];
+}
+
 export function registerDefaultTools(registry: ToolRegistry) {
   // bash
   const bashDef: ToolDefinition = {
@@ -32,8 +57,14 @@ export function registerDefaultTools(registry: ToolRegistry) {
       '2. The FULL combined stdout+stderr of every segment is returned, even if a segment exits non-zero.',
       '3. Non-zero exit is NOT treated as a tool failure — read the output to judge success.',
       '',
-      'Notes: prefer dedicated tools where they fit (read a file -> `read`, find by name -> `glob`,',
-      'search contents -> `grep`). This is a mutating tool (guarded by the permission system).',
+      'TOOL ROUTING (strict): use bash ONLY for real shell work — git, build, test, install,',
+      'process/file management, pipelines between programs. NEVER use bash to read, search,',
+      'locate, or edit files. Plain single-purpose cat/head/tail/grep/find/ls/sed/echo> commands',
+      'are intercepted and NOT executed. Use the dedicated tools instead:',
+      '  read a file -> `read` | search contents -> `grep` | find by name -> `glob`',
+      '  list a dir -> `list` | edit a file -> `search_replace` | create/rewrite -> `write`',
+      '',
+      'This is a mutating tool (guarded by the permission system).',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -46,8 +77,17 @@ export function registerDefaultTools(registry: ToolRegistry) {
   };
   registry.register(bashDef, async (args) => {
     let command = args.cmd;
-    if (typeof command !== 'string') {
+    if (typeof command !== 'string' || !command.trim()) {
       return 'Tool error: cmd must be a shell command string.';
+    }
+    // Runtime tool-routing enforcement: a plain cat/grep/find/ls/sed/echo>
+    // duplicates a dedicated tool (and sed -i / echo > mutate files invisibly),
+    // so refuse it with a redirect instead of executing.
+    const redirectResult = checkBashRedirect(command);
+    if (redirectResult) {
+      recordRedirectCount(redirectResult.key);
+      logDebug(`[tool-redirect] ${redirectResult.key}: ${command.trim()}`);
+      return redirectResult.message;
     }
     return new Promise((resolve) => {
       // A non-zero exit is data, not a tool failure: chains like
@@ -283,18 +323,18 @@ export function registerDefaultTools(registry: ToolRegistry) {
   // list
   const listDef: ToolDefinition = {
     name: 'list',
-    description: 'List contents of a directory.',
+    description: 'List contents of a directory. Defaults to the current working directory.',
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path to the directory' }
+        path: { type: 'string', description: 'Optional path to the directory. Defaults to the current working directory.' }
       },
-      required: ['path']
+      required: []
     }
   };
   registry.register(listDef, async (args) => {
-    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
-    const fullPath = path.resolve(process.cwd(), args.path);
+    const target = typeof args.path === 'string' && args.path ? args.path : '.';
+    const fullPath = path.resolve(process.cwd(), target);
     const files = await readdir(fullPath, { withFileTypes: true });
     return files.map(f => `${f.isDirectory() ? '[DIR] ' : '[FILE] '}${f.name}`).join('\n');
   });
@@ -308,37 +348,31 @@ export function registerDefaultTools(registry: ToolRegistry) {
       '',
       'How to use:',
       '1. Provide a `pattern` (extended/POSIX ERE regular expression: supports | alternation, .* + ?, and char classes like [A-Z]).',
-      '2. Provide a `path` to a file or directory (relative to the project root, e.g. "packages/core/src").',
-      '3. Returns "file:line:matched-line" for each hit, or "No matches found." if none.',
+      '2. Optionally provide a `path` to a file or directory (relative to the project root). Defaults to the whole project.',
+      '3. Returns "file:line:matched-line" for each hit (capped at 200 lines), or "No matches found." if none.',
       '',
-      'Notes: searches source files only (*.ts/*.tsx/*.js/*.jsx/*.json/*.md).',
+      'Notes: by default skips node_modules/dist/.git and searches common source files',
+      '(*.ts/*.tsx/*.js/*.jsx/*.mjs/*.cjs/*.json/*.md/*.py/*.sh/*.css/*.html/*.yml/*.yaml).',
+      'Set includeExcluded=true to search EVERYTHING (all directories and file types) —',
+      'use that when you specifically need code from node_modules or build output.',
       'Finding a file by NAME/location -> use `glob`. Reading a file -> use `read`.',
     ].join('\n'),
     parameters: {
       type: 'object',
       properties: {
         pattern: { type: 'string', description: 'Extended regex (ERE) to match against file contents, e.g. "handleModelCommand|fetchModels"' },
-        path: { type: 'string', description: 'The file or directory to search in, relative to the project root (e.g. "packages/core/src")' }
+        path: { type: 'string', description: 'Optional file or directory to search (relative to the project root). Defaults to the whole project.' },
+        includeExcluded: { type: 'boolean', description: 'Set true to also search node_modules/dist/.git and all file types (rare; for dependency/build-output searches).' }
       },
-      required: ['pattern', 'path']
+      required: ['pattern']
     }
   };
   registry.register(grepDef, async (args) => {
     if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
-    if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid.';
-    const fullPath = path.resolve(process.cwd(), args.path);
-    // -E: extended regex (the model emits alternation '|', which is only valid
-    // in ERE; in BRE it is treated as a literal and often errors). --include
-    // keeps us out of node_modules/dist noise. We pass args via execFile-style
-    // array to avoid shell-quoting bugs in the pattern/path.
+    const target = typeof args.path === 'string' && args.path ? args.path : '.';
+    const fullPath = path.resolve(process.cwd(), target);
     return new Promise((resolve) => {
-      // NOTE: execFile passes args verbatim (no shell), so brace expansion
-      // like '*.{ts,tsx}' never expands — grep treats it as a literal glob
-      // that matches nothing. Each extension needs its own --include flag.
-      const includes = ['ts', 'tsx', 'js', 'jsx', 'json', 'md'].map(
-        (ext) => `--include=*.${ext}`,
-      );
-      const child = execFile('grep', ['-rInE', ...includes, args.pattern, fullPath], (err, stdout, stderr) => {
+      const child = execFile('grep', buildGrepArgs(args.pattern, fullPath, args.includeExcluded === true), { maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
         // grep exits 1 when there are NO matches — that is success, not an error.
         if (err && (err as any).code === 1 && !stderr) {
           resolve('No matches found.');
@@ -348,7 +382,16 @@ export function registerDefaultTools(registry: ToolRegistry) {
           resolve(`Error: ${stderr || (err as Error).message}`);
           return;
         }
-        resolve(stdout || 'No matches found.');
+        const lines = (stdout || '').split('\n').filter(Boolean);
+        if (lines.length === 0) {
+          resolve('No matches found.');
+          return;
+        }
+        if (lines.length > 200) {
+          resolve(lines.slice(0, 200).join('\n') + `\n... ${lines.length - 200} more matches truncated. Narrow the pattern or path, or grep a specific file.`);
+          return;
+        }
+        resolve(lines.join('\n'));
       });
     });
   });

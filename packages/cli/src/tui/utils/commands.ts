@@ -24,6 +24,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'model', description: 'Select a different LLM model' },
   { name: 'mode', description: 'Switch permission mode (notify / auto-edit / auto)' },
   { name: 'tools', description: 'List available tools for the current mode' },
+  { name: 'usage', description: 'Show tool call counts and bash->tool redirects' },
   { name: 'session', description: 'List, load, or create a session' },
   { name: 'mcp', description: 'Manage MCP server connections' },
   { name: 'continue', description: 'Continue executing the active plan' },

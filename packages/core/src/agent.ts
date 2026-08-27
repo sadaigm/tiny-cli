@@ -11,6 +11,7 @@ import {
 import { ModelClient } from "./model/client.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { registerDefaultTools } from "./tools/definitions.js";
+import { getRedirectCounts } from "./tools/bashRedirect.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./prompts/default.js";
 import { AGENT_SYSTEM_PROMPT } from "./prompts/agent.js";
 import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
@@ -700,6 +701,13 @@ GUIDANCE FOR PLAN EXECUTION:
   getMessages() {
     return this.messages;
   }
+
+  /** Per-process tool call counts + how often bash commands were redirected
+   *  to dedicated tools (see tools/bashRedirect.ts). */
+  getToolUsageStats(): { tools: Record<string, number>; redirects: Record<string, number> } {
+    return { tools: this.registry.getUsageStats(), redirects: getRedirectCounts() };
+  }
+
   getToolDefinitions(mode?: 'agent' | 'chat' | 'plan') {
     let definitions = [
       ...this.registry.getDefinitions(),
