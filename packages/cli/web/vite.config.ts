@@ -58,8 +58,9 @@ export default defineConfig({
       path: empty,
       'node:path': empty,
       // Stub @tiny-cli/core so its node-fetch chain never enters the browser
-      // bundle. Web mode injects a fake agent/session via main.tsx; the only
-      // value import from core that <App> needs is SessionManager.createSession.
+      // bundle. Web mode injects a fake agent/session via main.tsx; the value
+      // imports <App> needs (SessionManager, setLogLevel/logError,
+      // DEFAULT_COMPACT_THRESHOLD) live in shims/core.js.
       '@tiny-cli/core': fileURLToPath(new URL('./shims/core.js', import.meta.url)),
       // Stub the file-mention module: it uses Node fs/path to scan the
       // workspace, which doesn't exist in the browser. Returns an empty index

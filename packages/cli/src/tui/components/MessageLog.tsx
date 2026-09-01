@@ -84,6 +84,12 @@ interface LogView {
    * than the pane. 0 = top of the entry's body.
    */
   lineOffset: number;
+  /**
+   * Ids of turn groups (keyed by the group's first entry id) folded to
+   * their one-line gist. Submitting a message folds every completed turn;
+   * Tab on a folded turn unfolds it (chat-redesign aging behavior).
+   */
+  folded: Set<string>;
 }
 
 type LogViewAction =
@@ -91,11 +97,13 @@ type LogViewAction =
   | { type: 'FOCUS_ABS'; index: number; length: number; rearm?: boolean }
   | { type: 'SCROLL_LINE'; offset: number }
   | { type: 'TOGGLE_EXPAND'; id: string }
+  | { type: 'TOGGLE_FOLD'; id: string }
+  | { type: 'FOLD_TURNS'; ids: string[] }
   | { type: 'RECONCILE'; length: number; rearm?: boolean }
   | { type: 'RUNNING_CHANGE'; running: boolean; entries?: LogEntry[] };
 
 function createLogView(length: number): LogView {
-  return { focusIndex: length > 0 ? length - 1 : 0, expanded: new Set(), autoFollow: true, lineOffset: 0 };
+  return { focusIndex: length > 0 ? length - 1 : 0, expanded: new Set(), autoFollow: true, lineOffset: 0, folded: new Set() };
 }
 
 function logViewReducer(state: LogView, action: LogViewAction): LogView {
@@ -127,6 +135,20 @@ function logViewReducer(state: LogView, action: LogViewAction): LogView {
       if (expanded.has(action.id)) expanded.delete(action.id);
       else expanded.add(action.id);
       return { ...state, expanded, lineOffset: 0 };
+    }
+    case 'TOGGLE_FOLD': {
+      const folded = new Set(state.folded);
+      if (folded.has(action.id)) folded.delete(action.id);
+      else folded.add(action.id);
+      return { ...state, folded };
+    }
+    case 'FOLD_TURNS': {
+      // Fold unconditionally (ids already exclude live/newest groups) — a
+      // turn the user manually unfolded stays folded on the next submit,
+      // matching the chat-redesign rule "old turns age to one line".
+      const folded = new Set(state.folded);
+      for (const id of action.ids) folded.add(id);
+      return { ...state, folded };
     }
     case 'RECONCILE': {
       // New entries arrived (or log cleared). Clamp focus; auto-follow pins to tail.
@@ -190,7 +212,7 @@ function wrappedLineCount(text: string, usable: number): number {
  *   Collapsed bodies cap at MAX_STANDARD_BODY_LINES, expanded do not.
  * - system / info / error: treated like a wrapped body line.
  */
-function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number): number {
+function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number, inTurn = false): number {
   const usable = Math.max(1, columns - BODY_INDENT);
   if (entry.type === 'tool_call' || entry.type === 'tool_result') {
     if (!expanded.has(entry.id)) return 1;
@@ -226,8 +248,10 @@ function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, 
       ? rawBodyLines
       : Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
   if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
-  // user/assistant have a header row ("❯ You:" / "🤖 Agent:"); others are body-only.
-  const headerLines = entry.type === 'user' || entry.type === 'assistant' ? 1 : 0;
+  // user/assistant have a header row ("❯" / "● Agent"); others are body-only.
+  // Assistant entries inside a turn group render body-only (the group header
+  // is the turn's single header), so they contribute no header line.
+  const headerLines = entry.type === 'user' || (entry.type === 'assistant' && !inTurn) ? 1 : 0;
   return Math.max(1, headerLines + bodyLines);
 }
 
@@ -265,6 +289,96 @@ function renderedBodyLines(entry: LogEntry, columns: number, expanded: Set<strin
 /** Lines of an entry's body the pane can show (1 pane header, 1 entry header). */
 const VISIBLE_BODY_BUDGET = (paneHeight: number): number => Math.max(1, paneHeight - 2);
 
+// ─── Turn grouping (render-time; no state) ────────────────────────────
+
+/**
+ * A render group: a slice of `entries` rendered together.
+ *
+ * `turn` groups are agent turns — the run of non-user entries following a
+ * user entry. They render with a header row (`● Agent · gist … meta`) and a
+ * left rail (`Box borderStyle="left"`) around their members, matching the
+ * chat-redesign grammar. User entries (and anything before the first user
+ * message) render loose — the pre-redesign look.
+ */
+interface RenderGroup {
+  /** Inclusive start index into `entries`. */
+  start: number;
+  /** Exclusive end index into `entries`. */
+  end: number;
+  /** Agent turn (rail + header) vs loose entry. */
+  turn: boolean;
+}
+
+/**
+ * Partition entries into render groups. Pure; memoised by the component and
+ * shared by the viewport estimator and the renderer so both agree on the
+ * extra header line each turn group contributes.
+ */
+function groupEntries(entries: LogEntry[]): RenderGroup[] {
+  const groups: RenderGroup[] = [];
+  let i = 0;
+  while (i < entries.length) {
+    if (entries[i].type === 'user') {
+      groups.push({ start: i, end: i + 1, turn: false });
+      i++;
+      const start = i;
+      while (i < entries.length && entries[i].type !== 'user') i++;
+      if (i > start) groups.push({ start, end: i, turn: true });
+    } else {
+      // Entries before any user message (session hydration, banners).
+      groups.push({ start: i, end: i + 1, turn: false });
+      i++;
+    }
+  }
+  return groups;
+}
+
+
+/** Header text for a turn group: gist from the first assistant body, tools count. */
+function groupKey(entries: LogEntry[], g: RenderGroup): string {
+  return entries[g.start]?.id ?? `g${g.start}`;
+}
+
+/** Header text for a turn group: gist from the first assistant body, tools count. */
+function turnHeader(entries: LogEntry[], group: RenderGroup): { gist: string; tools: number } {
+  let gist = '';
+  let tools = 0;
+  for (let i = group.start; i < group.end; i++) {
+    const e = entries[i];
+    if (e.type === 'tool_call') tools++;
+    if (!gist && e.type === 'assistant' && e.content) gist = e.content.split('\n')[0].replace(/^#+\s*/, '').trim();
+  }
+  return { gist, tools };
+}
+
+/**
+ * Visible height of a turn group's rail: the sum of the members' rendered
+ * lines, applying the same focused-entry cap the renderer applies — so the
+ * rail is exactly as tall as the body beside it.
+ */
+function railHeight(
+  entries: LogEntry[],
+  expanded: Set<string>,
+  from: number,
+  to: number,
+  columns: number,
+  paneHeight: number,
+  agentRunning: boolean,
+  focusId?: string,
+): number {
+  const budget = VISIBLE_BODY_BUDGET(paneHeight);
+  let total = 0;
+  for (let i = from; i < to; i++) {
+    const entry = entries[i];
+    let lines = estimateLines(entry, columns, expanded, agentRunning, undefined, true);
+    if (entry.id === focusId && renderedBodyLines(entry, columns, expanded, agentRunning) > budget) {
+      lines = Math.min(lines, 1 + budget);
+    }
+    total += lines;
+  }
+  return Math.max(1, total);
+}
+
 /** Result of computing the visible window for the current focus + size. */
 interface Window {
   startIndex: number;
@@ -288,18 +402,29 @@ function computeWindow(
   autoFollow: boolean,
   expanded: Set<string>,
   agentRunning: boolean,
+  extraLines: number[] = [],
+  turnMember: boolean[] = [],
+  lineOverride: (number | null)[] = [],
 ): Window {
   const n = entries.length;
   if (n === 0 || paneHeight <= 1) {
     return { startIndex: 0, endIndex: 0, linesAbove: 0, linesBelow: 0 };
   }
+  // Rendered cost of an entry: folded-group members are overridden outright
+  // (gist line = 1 on the group start, 0 on the rest); everything else is its
+  // own estimate plus any group-header row, with turn members' assistant
+  // entries suppressing their own header (inTurn).
+  const cost = (i: number, cap?: number): number =>
+    lineOverride[i] != null
+      ? (lineOverride[i] as number)
+      : estimateLines(entries[i], columns, expanded, agentRunning, cap, turnMember[i] ?? false) + (extraLines[i] ?? 0);
   // When the focused entry is expanded taller than the pane, its body is
   // windowed to this many lines (see MessageItem's maxLines) — cap the
   // estimate to match so the viewport math stays honest.
   const focusBudget = VISIBLE_BODY_BUDGET(paneHeight);
   const capFor = (i: number): number | undefined => {
     if (i !== focusIndex) return undefined;
-    return estimateLines(entries[i], columns, expanded, agentRunning) - 1 > focusBudget
+    return estimateLines(entries[i], columns, expanded, agentRunning, undefined, turnMember[i] ?? false) - 1 > focusBudget
       ? focusBudget
       : undefined;
   };
@@ -309,9 +434,9 @@ function computeWindow(
     let start = n;
     let used = 0;
     for (let i = n - 1; i >= 0; i--) {
-      const cost = estimateLines(entries[i], columns, expanded, agentRunning, capFor(i));
-      if (used + cost > budget && start < n) break;
-      used += cost;
+      const c = cost(i, capFor(i));
+      if (used + c > budget && start < n) break;
+      used += c;
       start = i;
     }
     return { startIndex: start, endIndex: n, linesAbove: start, linesBelow: 0 };
@@ -321,20 +446,20 @@ function computeWindow(
   const budget = paneHeight - 1;
   let start = focusIndex;
   let end = focusIndex + 1;
-  let used = estimateLines(entries[focusIndex], columns, expanded, agentRunning, capFor(focusIndex));
+  let used = cost(focusIndex, capFor(focusIndex));
 
   // Grow downward.
   while (end < n && used < budget) {
-    const cost = estimateLines(entries[end], columns, expanded, agentRunning, capFor(end));
-    if (used + cost > budget) break;
-    used += cost;
+    const c = cost(end, capFor(end));
+    if (used + c > budget) break;
+    used += c;
     end++;
   }
   // Grow upward.
   while (start > 0 && used < budget) {
-    const cost = estimateLines(entries[start - 1], columns, expanded, agentRunning, capFor(start - 1));
-    if (used + cost > budget) break;
-    used += cost;
+    const c = cost(start - 1, capFor(start - 1));
+    if (used + c > budget) break;
+    used += c;
     start--;
   }
 
@@ -404,9 +529,19 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       const grew = entries.length > prevLengthRef.current;
       const rearm = grew && entries.slice(prevLengthRef.current).some((e) => e.type === 'user');
       dispatch({ type: 'RECONCILE', length: entries.length, rearm });
+      // Submitting a message ages the conversation: every turn group except
+      // the newest collapses to its one-line gist (chat-redesign behavior).
+      if (rearm) {
+        const turnGroups = groupEntries(entries).filter((g) => g.turn);
+        const keepNewest = turnGroups[turnGroups.length - 1];
+        dispatch({
+          type: 'FOLD_TURNS',
+          ids: turnGroups.filter((g) => g !== keepNewest).map((g) => groupKey(entries, g)),
+        });
+      }
       prevLengthRef.current = entries.length;
     }
-  }, [entries.length]);
+  }, [entries.length, entries]);
 
   // Collapse reasoning sections when a turn finishes (running → false).
   const prevRunningRef = useRef(agentRunning);
@@ -510,8 +645,16 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeightRef.current - 1), length: n });
         else if (key.pageDown) dispatch({ type: 'FOCUS_DELTA', delta: paneHeightRef.current - 1, length: n });
         else if (key.tab) {
-          const focusedId = entriesRef.current[focusIndexRef.current]?.id;
-          if (focusedId) dispatch({ type: 'TOGGLE_EXPAND', id: focusedId });
+          // Tab on a turn member folds/unfolds its whole turn; on a loose
+          // entry it keeps the per-entry expand behavior.
+          const focused = entriesRef.current[focusIndexRef.current];
+          if (focused) {
+            const fg = groupEntries(entriesRef.current).find(
+              (g) => g.turn && focusIndexRef.current >= g.start && focusIndexRef.current < g.end,
+            );
+            if (fg) dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
+            else dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
+          }
         } else if (matchesBinding(input, key, bindingFor('yank'))) {
           // Yank: OSC 52 copy of the focused entry's raw content (tool
           // args/result, or message text) to the local clipboard.
@@ -558,10 +701,42 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     [dispatchWheel, entries],
   );
 
+  // Turn grouping — shared by the estimator and the renderer (see groupEntries).
+  const groups = useMemo(() => groupEntries(entries), [entries]);
+  const turnMember = useMemo(() => {
+    const member = new Array<boolean>(entries.length).fill(false);
+    for (const g of groups) if (g.turn) for (let i = g.start; i < g.end; i++) member[i] = true;
+    return member;
+  }, [entries, groups]);
+
+  // Layout facts derived once, shared by the estimator and the renderer:
+  // - extra: +1 header row on each unfolded turn group start, +1 spacing row
+  //   before every group except the very first entry.
+  // - override: folded turn groups collapse to a single gist line
+  //   (spacing + gist on the group start, 0 on the hidden members).
+  const { extra, override } = useMemo(() => {
+    const extra = new Array<number>(entries.length).fill(0);
+    const override = new Array<number | null>(entries.length).fill(null);
+    for (const g of groups) {
+      const spacing = g.start > 0 ? 1 : 0;
+      if (!g.turn) {
+        extra[g.start] += spacing;
+        continue;
+      }
+      if (view.folded.has(groupKey(entries, g))) {
+        for (let i = g.start; i < g.end; i++) override[i] = 0;
+        override[g.start] = spacing + 1; // blank row + gist line
+      } else {
+        extra[g.start] += spacing + 1; // blank row + `● Agent` header
+      }
+    }
+    return { extra, override };
+  }, [entries, groups, view.folded]);
+
   // Compute the visible window — memoised on relevant inputs.
   const win = useMemo(
-    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning),
-    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning],
+    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, extra, turnMember, override),
+    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, extra, turnMember, override],
   );
 
   const visibleEntries = entries.slice(win.startIndex, win.endIndex);
@@ -574,6 +749,99 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}${yankStatus ? '  ·  ' + yankStatus : ''}`
     : `${positionHint ? positionHint + '  ·  ' : ''}Ctrl+P to browse`;
 
+  // Chunk the visible window into render groups. Groups clipped by the
+  // window still render correctly: their header/rail covers only the visible
+  // members (the estimator charged the header when the group's first member
+  // entered the window).
+  const renderItem = (entry: LogEntry, index: number, inTurn = false): React.ReactElement => {
+    const isFocused = entry.id === entries[view.focusIndex]?.id;
+    const budget = VISIBLE_BODY_BUDGET(paneHeight);
+    const scrollable =
+      isFocused &&
+      renderedBodyLines(entry, paneColumns, view.expanded, agentRunning) > budget;
+    return (
+      <MessageItem
+        key={entry.id}
+        entry={entry}
+        focused={isFocused}
+        expanded={view.expanded.has(entry.id)}
+        agentRunning={agentRunning}
+        columns={paneColumns}
+        lineOffset={scrollable ? view.lineOffset : 0}
+        maxLines={scrollable ? budget : undefined}
+        inTurn={inTurn}
+      />
+    );
+  };
+
+  const theme = getTheme();
+  const renderChunks = (): React.ReactElement[] => {
+    const out: React.ReactElement[] = [];
+    for (const g of groups) {
+      if (g.end <= win.startIndex || g.start >= win.endIndex) continue;
+      const from = Math.max(g.start, win.startIndex);
+      const to = Math.min(g.end, win.endIndex);
+      const blank = g.start > 0 && from === g.start ? <Text key={`sp-${g.start}`}>{' '}</Text> : null;
+      if (blank) out.push(blank);
+      if (!g.turn) {
+        for (let i = from; i < to; i++) out.push(renderItem(entries[i], i));
+        continue;
+      }
+      const live = agentRunning && g.end === entries.length;
+      const { gist, tools } = turnHeader(entries, g);
+      const meta = live ? 'streaming…' : `${tools} tool${tools === 1 ? '' : 's'}`;
+      // Folded turn: one dim gist line (⌄ hints it can unfold).
+      if (view.folded.has(groupKey(entries, g))) {
+        out.push(
+          <Box key={`fold-${g.start}`} justifyContent="space-between">
+            <Text color={theme.toolResult}>
+              {'● '}
+              {gist ? gist.slice(0, Math.max(4, paneColumns - 24)) : 'Agent turn'}
+            </Text>
+            <Text dimColor>{meta}  ⌄</Text>
+          </Box>,
+        );
+        continue;
+      }
+      // Agent turn: header row + left rail around its (visible) members.
+      // The header renders only when the group's first member is inside the
+      // window — exactly when the estimator charged its +1 line, so the
+      // viewport math and the render stay in sync when the window clips a
+      // group at the top.
+      const railColor = live ? theme.accent : theme.border;
+      out.push(
+        <Box key={`turn-${g.start}`} flexDirection="column">
+          {from === g.start ? (
+            <Box justifyContent="space-between">
+              <Text color={live ? theme.accent : theme.assistant}>
+                {'● Agent'}
+                {gist ? <Text color={theme.system}> · {gist.slice(0, Math.max(4, paneColumns - 24))}</Text> : null}
+              </Text>
+              <Text dimColor>{meta}  ⌃</Text>
+            </Box>
+          ) : null}
+          {/* Ink has no single-side border: the rail is a 1-char column of │
+              sized to the group's visible height (same estimator the window
+              uses, same focus cap — keeps the rail exactly as tall as the body). */}
+          <Box flexDirection="row">
+            <Box width={1}>
+              <Text color={railColor}>
+                {Array.from(
+                  { length: railHeight(entries, view.expanded, from, to, paneColumns, paneHeight, agentRunning, entries[view.focusIndex]?.id) },
+                  () => '│',
+                ).join('\n')}
+              </Text>
+            </Box>
+            <Box flexDirection="column" flexGrow={1}>
+              {entries.slice(from, to).map((entry, i) => renderItem(entry, from + i, true))}
+            </Box>
+          </Box>
+        </Box>,
+      );
+    }
+    return out;
+  };
+
   return (
     // Fixed height + overflow hidden: the pane is a stable viewport that
     // never grows with its content. No flexGrow — the parent gives it an
@@ -583,28 +851,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     <Box flexDirection="column">
       <Box flexDirection="column" height={paneHeight} overflowY="hidden">
         <Text dimColor> {headerText}</Text>
-        {visibleEntries.map((entry) => {
-          const isFocused = entry.id === entries[view.focusIndex]?.id;
-          // Only the focused entry participates in line-level scrolling: its
-          // body is windowed to the pane budget at the current offset. Other
-          // entries render whole (they were small enough to share the pane).
-          const budget = VISIBLE_BODY_BUDGET(paneHeight);
-          const scrollable =
-            isFocused &&
-            renderedBodyLines(entry, paneColumns, view.expanded, agentRunning) > budget;
-          return (
-            <MessageItem
-              key={entry.id}
-              entry={entry}
-              focused={isFocused}
-              expanded={view.expanded.has(entry.id)}
-              agentRunning={agentRunning}
-              columns={paneColumns}
-              lineOffset={scrollable ? view.lineOffset : 0}
-              maxLines={scrollable ? budget : undefined}
-            />
-          );
-        })}
+        {renderChunks()}
         {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
         {/* Live streaming phases — subscribed to the StreamStore, so token
             deltas re-render only these panels, never the whole App. */}

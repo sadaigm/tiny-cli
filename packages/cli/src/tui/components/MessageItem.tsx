@@ -41,19 +41,25 @@ export interface MessageItemProps {
   lineOffset?: number;
   /** Cap on rendered body lines — the pane's viewport budget for this entry. */
   maxLines?: number;
+  /**
+   * True when this entry renders inside an agent turn group (MessageLog's
+   * rail). Turn members suppress their own header row — the group header
+   * (`● Agent · gist … meta`) is the single header for the whole turn.
+   */
+  inTurn?: boolean;
 }
 
 /** Icon prefix for each log entry type. */
 const ICONS: Record<LogEntryType, string> = {
   user: '❯',
-  assistant: '🤖',
-  reasoning: '💭',
-  tool_call: '🔧',
-  tool_result: '↳',
-  system: 'ℹ',
+  assistant: '●',
+  reasoning: '⋯',
+  tool_call: '⎿',
+  tool_result: '└',
+  system: '·',
   plan: '▶',
   error: '✖',
-  info: 'ℹ',
+  info: '·',
 };
 
 /** Chalk color name for each log entry type, from the active theme. */
@@ -186,6 +192,7 @@ export default function MessageItem({
   agentRunning = false,
   lineOffset = 0,
   maxLines,
+  inTurn = false,
 }: MessageItemProps): React.ReactElement {
   const color = entryColors()[entry.type];
   const timing = formatTiming(entry.timing);
@@ -228,7 +235,7 @@ export default function MessageItem({
         <Box>
           <Text color={color}>
             {marker}
-            {ICONS[entry.type]} Thinking:{expanded ? '  ⤤ collapse' : ''}
+            {ICONS[entry.type]} thinking{expanded ? '  ⤤ collapse' : ''}
           </Text>
           {hiddenHint ? <Text dimColor>{hiddenHint}</Text> : null}
         </Box>
@@ -252,14 +259,40 @@ export default function MessageItem({
   if (entry.type === 'user' || entry.type === 'assistant') {
     const allLines = markdownToLines(entry.content, Math.max(1, columns - 3));
     const bodyLines = maxLines === undefined ? allLines : allLines.slice(lineOffset, lineOffset + maxLines);
+    // Turn members (assistant inside a rail) render body-only: the group
+    // header is the turn's single header.
+    if (entry.type === 'assistant' && inTurn) {
+      return (
+        <Box marginLeft={1}>
+          <MarkdownBody lines={bodyLines} color={bodyColor} />
+        </Box>
+      );
+    }
+    // User rows are the chat "bubble": right-aligned, user-coloured — the
+    // visual contrast against left-anchored agent turns (chat-redesign).
+    if (entry.type === 'user') {
+      return (
+        <Box flexDirection="column" alignItems="flex-end">
+          <Box>
+            <Text color={color}>
+              {marker}
+              {`${ICONS.user} `}
+            </Text>
+            <Box alignItems="flex-end">
+              <MarkdownBody lines={bodyLines} color={color} />
+            </Box>
+          </Box>
+        </Box>
+      );
+    }
     return (
       <Box flexDirection="column">
         <Box>
           <Text color={color}>
             {marker}
-            {ICONS[entry.type]} {entry.type === 'user' ? 'You' : 'Agent'}:
+            {`${ICONS[entry.type]} Agent`}
           </Text>
-          {entry.type === 'assistant' && timing ? <Text dimColor>{timing}</Text> : null}
+          {timing ? <Text dimColor>{timing}</Text> : null}
           {entry.queued ? <Text dimColor color="yellow"> (queued)</Text> : null}
         </Box>
         <Box marginLeft={3}>

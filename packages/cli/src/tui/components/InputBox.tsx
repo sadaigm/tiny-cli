@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { Box, Text, useInput, usePaste, useStdout } from 'ink';
 import type { TuiMode, AgentState } from '../state.js';
 import AutocompletePopover from './AutocompletePopover.js';
@@ -46,6 +46,8 @@ export interface InputBoxProps {
    * search prompt owns Esc (cancel search).
    */
   onSearchActiveChange?: (active: boolean) => void;
+  /** Reports the draft's current line count (multi-line Shift+Enter drafts). */
+  onDraftLinesChange?: (lines: number) => void;
   /** Optional dispatch function for debug logging */
   dispatch?: (action: any) => void;
   /**
@@ -128,12 +130,19 @@ function InputBox({
   fileIndex = [],
   onMentionActiveChange,
   onSearchActiveChange,
+  onDraftLinesChange,
   focus = true,
   dispatch,
 }: InputBoxProps): React.ReactElement {
   const { stdout } = useStdout();
   const terminalColumns = stdout?.columns ?? 80;
   const [value, setValue] = useState('');
+  // Report the draft's line count upward so App can size the input row and
+  // shrink the conversation pane (same mechanism as the popover rows).
+  // Presentation only — editing behavior is unchanged.
+  useEffect(() => {
+    onDraftLinesChange?.(value.split('\n').length);
+  }, [value, onDraftLinesChange]);
   // Bumped whenever we programmatically replace the input value, so
   // TextInput snaps its cursor to the end (see cursorToEndSignal).
   const [cursorEndSignal, setCursorEndSignal] = useState(0);

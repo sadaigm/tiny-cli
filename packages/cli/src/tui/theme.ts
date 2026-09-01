@@ -48,19 +48,25 @@ export interface Theme {
   warning: string;
 }
 
-/** Built-in palette (matches the pre-theme hard-coded colours). */
+/**
+ * Built-in palette (chat-redesign: dark slate, amber accent, teal tools).
+ *
+ * ANSI names rather than exact hex: the web renderer (ink-web) ships a chalk
+ * shim without `.hex`, so hex defaults would crash the browser build. Hex
+ * remains valid in `theme.json` for truecolor terminal users.
+ */
 export const DEFAULT_THEME: Theme = {
   user: 'green',
-  assistant: 'blue',
+  assistant: 'blueBright',
   reasoning: 'gray',
-  toolCall: 'cyan',
+  toolCall: 'cyanBright',
   toolResult: 'gray',
   system: 'gray',
   error: 'red',
-  border: 'cyan',
-  borderStatus: 'cyan',
-  statusText: 'cyan',
-  accent: 'magenta',
+  border: 'gray',
+  borderStatus: 'gray',
+  statusText: 'whiteBright',
+  accent: 'yellowBright',
   warning: 'yellow',
 };
 

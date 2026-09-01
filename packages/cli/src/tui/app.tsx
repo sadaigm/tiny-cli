@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useReducer, useRef } from 'react';
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { SessionManager } from '@tiny-cli/core';
 import type { Agent, Session, AgentConfig } from '@tiny-cli/core';
@@ -1155,7 +1155,11 @@ export default function App({
   //   - 5  (bottom agent-details box: Header 2 + StatusBar 1 + border 2)
   //   = top conversation box (its border + a 1-line status strip + the log)
   const bottomBoxHeight = 5;
-  const inputHeight = 1;
+  // Multi-line draft display: the input grows with the draft (Shift+Enter),
+  // capped so a giant paste-chip draft can't eat the screen. Editing behavior
+  // is unchanged — only the rendered height and the pane budget below.
+  const [draftLines, setDraftLines] = useState(1);
+  const inputHeight = Math.min(6, draftLines);
   // While the @file-mention (or /command) picker is open, the popover block
   // adds MENTION_POPOVER_ROWS rows below the input row. The root column is
   // height=terminalRows, so the conversation pane must shrink by the same
@@ -1255,6 +1259,7 @@ export default function App({
           fileIndex={fileIndex}
           onMentionActiveChange={setMentionActive}
           onSearchActiveChange={setSearchActive}
+          onDraftLinesChange={setDraftLines}
           focus={!browseMode && !state.pendingApproval && !state.pendingQuestions && !state.pendingRecovery && !state.pendingPlanConfirm && !state.pendingSelector}
           dispatch={dispatch}
         />
