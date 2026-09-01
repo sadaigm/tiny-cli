@@ -3,8 +3,6 @@ import path from 'path';
 import os from 'os';
 import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig, PermissionMode, LogLevel } from '@tiny-cli/core';
 
-const GLOBAL_CONFIG_DIR = path.join(os.homedir(), '.config', 'tiny-cli');
-const GLOBAL_CONFIG_FILE = path.join(GLOBAL_CONFIG_DIR, 'config.json');
 const PROJECT_CONFIG_FILE = path.join(process.cwd(), '.tiny-cli', 'agents.json');
 const HOME_PROJECT_CONFIG_FILE = path.join(os.homedir(), '.tiny-cli', 'agents.json');
 
@@ -26,7 +24,14 @@ interface AgentProfile {
     plan?: string;
   };
   temperature?: number;
+  /** @deprecated Use settings.permissionMode — migrated on load. */
   permissionMode?: PermissionMode;
+  /** Settings block shared with the GUI; single source of truth for permissionMode. */
+  settings?: {
+    permissionMode?: PermissionMode;
+    lastSessionId?: string;
+    activeSkills?: string[];
+  };
   logLevel?: LogLevel;
   maxIterations?: number;
   compactionThresholdTokens?: number;
@@ -48,10 +53,12 @@ interface AgentProfile {
 export async function loadConfig(): Promise<AgentConfig> {
   // 1. Try project-local config (CWD)
   let configData = await tryReadFile(PROJECT_CONFIG_FILE);
-  
+  let configFilePath = PROJECT_CONFIG_FILE;
+
   // 2. Try home-project config (~/.tiny-cli/agents.json)
   if (!configData) {
     configData = await tryReadFile(HOME_PROJECT_CONFIG_FILE);
+    configFilePath = HOME_PROJECT_CONFIG_FILE;
   }
 
   // 3. Auto-create ~/.tiny-cli/agents.json if missing
@@ -88,6 +95,24 @@ export async function loadConfig(): Promise<AgentConfig> {
       const profile = profiles.find(p => p.name === 'default') || profiles[0];
       
       if (profile) {
+        // permissionMode: settings block is the single source of truth.
+        // Migrate a legacy root-level key and drop it from the file.
+        if (profile.permissionMode !== undefined) {
+          if (profile.settings?.permissionMode === undefined) {
+            profile.settings = { ...profile.settings, permissionMode: profile.permissionMode };
+          } else if (profile.settings.permissionMode !== profile.permissionMode) {
+            console.warn(
+              `⚠️  ${configFilePath}: conflicting permissionMode keys — using settings.permissionMode "${profile.settings.permissionMode}" (root-level "${profile.permissionMode}" ignored)`
+            );
+          }
+          delete profile.permissionMode;
+          try {
+            await fs.writeFile(configFilePath, JSON.stringify(profiles, null, 2));
+          } catch {
+            // Read-only config location; the in-memory migration still applies.
+          }
+        }
+
         const env = profile.environment;
         const insecure = env?.insecure === true || env?.rejectUnauthorized === false;
 
@@ -100,7 +125,7 @@ export async function loadConfig(): Promise<AgentConfig> {
           apiKey: env?.apiKey,
           insecure: insecure,
           mcpServers: profile.mcpServers,
-          permissionMode: profile.permissionMode,
+          permissionMode: profile.settings?.permissionMode,
           logLevel: profile.logLevel,
           maxIterations: profile.maxIterations,
           compactionThresholdTokens: profile.compactionThresholdTokens,
@@ -111,20 +136,10 @@ export async function loadConfig(): Promise<AgentConfig> {
             noSkills: false,
             trusted: await isProjectTrusted()
           },
-          enableSkillCommands: profile.enableSkillCommands !== false
+          enableSkillCommands: profile.enableSkillCommands !== false,
+          lastSessionId: profile.settings?.lastSessionId,
+          activeSkills: profile.settings?.activeSkills
         };
-
-        // Merge global settings (like lastSessionId)
-        const globalData = await tryReadFile(GLOBAL_CONFIG_FILE);
-        if (globalData) {
-          const globalConfig = JSON.parse(globalData);
-          if (globalConfig.lastSessionId) {
-            config.lastSessionId = globalConfig.lastSessionId;
-          }
-          if (globalConfig.permissionMode) {
-            config.permissionMode = globalConfig.permissionMode;
-          }
-        }
 
         return config;
       }
@@ -157,7 +172,32 @@ async function isProjectTrusted(): Promise<boolean> {
   }
 }
 
+/**
+ * Persists cross-run runtime state (lastSessionId, activeSkills) into the
+ * active profile's settings block in agents.json — the single config file.
+ */
 export async function saveConfig(config: AgentConfig): Promise<void> {
-  await fs.mkdir(GLOBAL_CONFIG_DIR, { recursive: true });
-  await fs.writeFile(GLOBAL_CONFIG_FILE, JSON.stringify(config, null, 2));
+  // Same file precedence as loadConfig: project-local, then home.
+  let filePath = PROJECT_CONFIG_FILE;
+  let data = await tryReadFile(filePath);
+  if (!data) {
+    filePath = HOME_PROJECT_CONFIG_FILE;
+    data = await tryReadFile(filePath);
+  }
+  if (!data) return;
+
+  try {
+    const profiles: AgentProfile[] = JSON.parse(data);
+    const profile = profiles.find(p => p.name === 'default') || profiles[0];
+    if (!profile) return;
+
+    profile.settings = {
+      ...profile.settings,
+      ...(config.lastSessionId ? { lastSessionId: config.lastSessionId } : {}),
+      ...(config.activeSkills ? { activeSkills: config.activeSkills } : {})
+    };
+    await fs.writeFile(filePath, JSON.stringify(profiles, null, 2));
+  } catch {
+    // Invalid JSON or unwritable location; skip persistence.
+  }
 }

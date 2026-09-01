@@ -1,8 +1,8 @@
 /**
  * Persistence for the input history.
  *
- * Entries live in a per-project JSON file under `~/.config/tiny-cli/`
- * (next to the global config), keyed by a stable hash of the project
+ * Entries live in a per-project JSON file under `~/.tiny-cli/`
+ * (next to the shared agents.json), keyed by a stable hash of the project
  * root, so switching between workspaces keeps separate histories while
  * one file holds them all.
  *
@@ -16,7 +16,7 @@ import path from 'path';
 import os from 'os';
 import { DEFAULT_HISTORY_LIMIT, InputHistory } from './inputHistory.js';
 
-const HISTORY_DIR = path.join(os.homedir(), '.config', 'tiny-cli');
+const HISTORY_DIR = path.join(os.homedir(), '.tiny-cli');
 const HISTORY_FILE = path.join(HISTORY_DIR, 'input-history.json');
 
 /** Upper bound on remembered projects, so the file stays small. */
