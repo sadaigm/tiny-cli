@@ -122,7 +122,7 @@ export async function loadConfig(): Promise<AgentConfig> {
           temperature: profile.temperature,
           systemPrompt: profile.systemPrompt,
           prompts: profile.prompts,
-          apiKey: env?.apiKey,
+          apiKey: expandApiKey(env?.apiKey),
           insecure: insecure,
           mcpServers: profile.mcpServers,
           permissionMode: profile.settings?.permissionMode,
@@ -149,6 +149,23 @@ export async function loadConfig(): Promise<AgentConfig> {
   }
 
   return DEFAULT_CONFIG;
+}
+
+/**
+ * Resolves an apiKey of the form "${VAR_NAME}" from the process environment
+ * (e.g. a token injected into a Docker container). Plain strings pass through
+ * unchanged; an unset/empty variable yields undefined with a warning, so the
+ * TUI still starts. The expanded value never gets written back to agents.json.
+ */
+function expandApiKey(value: string | undefined): string | undefined {
+  const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value ?? '');
+  if (!match) return value;
+  const expanded = process.env[match[1]];
+  if (!expanded) {
+    console.warn(`⚠️  agents.json apiKey references ${match[0]}, which is not set — requests will be sent without an API key`);
+    return undefined;
+  }
+  return expanded;
 }
 
 async function tryReadFile(filePath: string): Promise<string | null> {
