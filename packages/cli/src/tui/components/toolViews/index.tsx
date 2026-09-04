@@ -12,6 +12,13 @@ import type { LogEntry } from '../../state.js';
 import { summarizeToolCall, summarizeToolResult, wrapIndent } from '../../utils/toolSummary.js';
 import { bashView } from './bash.js';
 import { grepView } from './grep.js';
+import { fileReadView } from './fileRead.js';
+import { fileWriteView } from './fileWrite.js';
+import { diffView } from './diff.js';
+import { fileListView } from './fileList.js';
+import { taskListView } from './taskList.js';
+import { askUserView } from './askUser.js';
+import { memoryView } from './memory.js';
 
 /** One rendered body line. Color/dim map to compat <Text> props. */
 export interface SpecLine {
@@ -45,10 +52,34 @@ const fallbackView: ToolView = {
 const views: Record<string, ToolView> = {
   bash: bashView,
   grep: grepView,
+  read: fileReadView,
+  write: fileWriteView,
+  plan_write: fileWriteView,
+  create_skill: fileWriteView,
+  search_replace: diffView,
+  insert_lines: diffView,
+  glob: fileListView,
+  list: fileListView,
+  manage_tasks: taskListView,
+  mark_task_complete: taskListView,
+  ask_user: askUserView,
+  memory: memoryView,
 };
 
+/** Failed results (runner convention: result text starts with Error/…) render red. */
+function isFailedResult(entry: LogEntry): boolean {
+  if (entry.type !== 'tool_result') return false;
+  return /^(Error|error)[: ]/.test((entry.toolResult ?? entry.content ?? '').trimStart());
+}
+
 export function toolView(toolName?: string): ToolView {
-  return (toolName && views[toolName]) || fallbackView;
+  const base = (toolName && views[toolName]) || fallbackView;
+  return {
+    body(entry, columns) {
+      const lines = base.body(entry, columns);
+      return isFailedResult(entry) ? lines.map((l) => ({ ...l, color: 'red' })) : lines;
+    },
+  };
 }
 
 /** Estimator contract: the exact line count the renderer draws. */
