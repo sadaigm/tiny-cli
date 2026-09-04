@@ -83,8 +83,11 @@ export function planCompaction(messages: Message[], config: AgentConfig): Compac
 
 /** Rebuild history after a summary: system msgs + [PREVIOUS CONTEXT SUMMARY] + retained. */
 export function buildCompactedHistory(plan: CompactionPlan, summary: string): Message[] {
+  // User role, not system: several OpenAI-compatible APIs (GLM included)
+  // reject system messages that are not first in the list ("The messages
+  // parameter is illegal"), and this message sits mid-history after compaction.
   const summaryMessage: Message = {
-    role: "system",
+    role: "user",
     content: `[PREVIOUS CONTEXT SUMMARY]\n${summary}`,
   };
   return [...plan.system, summaryMessage, ...plan.retain];
