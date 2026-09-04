@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import https from 'https';
 import { AgentConfig, Message, ToolDefinition } from '../types.js';
-import { logTrace } from '../logger.js';
+import { logTrace, logDebug } from '../logger.js';
 
 export interface ModelResponse {
   content: string;
@@ -44,7 +44,10 @@ export class ModelClient {
       try {
         return await this.chatStreamed(messages, tools, signal, onText, onReasoning);
       } catch (err: any) {
-        if (err.name === 'AbortError' || signal?.aborted) throw err;
+        if (err.name === 'AbortError' || signal?.aborted) {
+          logDebug(`[trace] chat(): chatStreamed aborted (name=${err?.name}, userSignalAborted=${signal?.aborted}) — rethrowing`);
+          throw err;
+        }
         logTrace(`chat() — stream failed (${err.message}), falling back to buffered`);
       }
     }
@@ -58,7 +61,7 @@ export class ModelClient {
     if (tools && tools.length > 0) {
       payload.tools = tools.map(t => ({
         type: 'function',
-        function: t
+        function: { name: t.name, description: t.description, parameters: t.parameters }
       }));
     }
 
@@ -120,7 +123,10 @@ export class ModelClient {
       stream: true,
     };
     if (tools && tools.length > 0) {
-      payload.tools = tools.map((t) => ({ type: 'function', function: t }));
+      payload.tools = tools.map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters }
+      }));
     }
 
     const callStart = Date.now();
@@ -146,6 +152,15 @@ export class ModelClient {
     }
     logTrace(`chatStreamed() — stream open after ${Date.now() - callStart}ms, consuming deltas…`);
 
+    // node-fetch's abort path emits 'error' on the body stream. If no
+    // listener is attached at that instant (e.g. abort fires between awaited
+    // chunks), the emit throws synchronously out of abortController.abort()
+    // and surfaces as an unhandledRejection. Attach a listener up front so
+    // the original error lands in the log instead.
+    (response.body as any)?.on?.('error', (err: any) => {
+      logTrace(`chatStreamed() — body stream error: ${err?.name}: ${err?.message} (userSignalAborted=${signal?.aborted})`);
+    });
+
     // Tool-call fragments keyed by their stream index: name + argument
     // chunks concatenated until the stream ends.
     const toolCalls: { index: number; id: string; name: string; args: string }[] = [];
@@ -153,41 +168,62 @@ export class ModelClient {
 
     const decoder = new TextDecoder();
     let buffer = '';
-    for await (const chunk of response.body) {
-      buffer += decoder.decode(chunk as Uint8Array, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
-        let delta: any;
-        try {
-          delta = JSON.parse(line.slice(6));
-        } catch {
-          continue; // split JSON — remainder is in the buffer
-        }
-        const choice = delta.choices?.[0];
-        if (!choice) continue;
-        const piece = choice.delta?.content;
-        if (piece) {
-          content += piece;
-          onText(piece);
-        }
-        // Reasoning deltas (Ollama emits `reasoning`, DeepSeek/vLLM emit
-        // `reasoning_content`) — forwarded live, not part of the response.
-        const thought = choice.delta?.reasoning ?? choice.delta?.reasoning_content;
-        if (thought && onReasoning) onReasoning(thought);
-        const tc = choice.delta?.tool_calls?.[0];
-        if (tc) {
-          let slot = toolCalls.find((s) => s.index === (tc.index ?? 0));
-          if (!slot) {
-            slot = { index: tc.index ?? 0, id: tc.id ?? '', name: '', args: '' };
-            toolCalls.push(slot);
+    try {
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk as Uint8Array, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+          let delta: any;
+          try {
+            delta = JSON.parse(line.slice(6));
+          } catch {
+            continue; // split JSON — remainder is in the buffer
           }
-          if (tc.id) slot.id = tc.id;
-          if (tc.function?.name) slot.name += tc.function.name;
-          if (tc.function?.arguments) slot.args += tc.function.arguments;
+          const choice = delta.choices?.[0];
+          if (!choice) continue;
+          const piece = choice.delta?.content;
+          if (piece) {
+            content += piece;
+            onText(piece);
+          }
+          // Reasoning deltas (Ollama emits `reasoning`, DeepSeek/vLLM emit
+          // `reasoning_content`) — forwarded live, not part of the response.
+          const thought = choice.delta?.reasoning ?? choice.delta?.reasoning_content;
+          if (thought && onReasoning) onReasoning(thought);
+          const tc = choice.delta?.tool_calls?.[0];
+          if (tc) {
+            let slot = toolCalls.find((s) => s.index === (tc.index ?? 0));
+            if (!slot) {
+              slot = { index: tc.index ?? 0, id: tc.id ?? '', name: '', args: '' };
+              toolCalls.push(slot);
+            }
+            if (tc.id) slot.id = tc.id;
+            if (tc.function?.name) slot.name += tc.function.name;
+            if (tc.function?.arguments) slot.args += tc.function.arguments;
+          }
         }
       }
+    } catch (err: any) {
+      logDebug(`[trace] chatStreamed stream loop threw: name=${err?.name} message=${err?.message} userSignalAborted=${signal?.aborted}`);
+      // User abort mid-stream is a normal end of turn, not an error —
+      // return what streamed so far. A bare AbortError here would otherwise
+      // surface as an unhandledRejection from the aborted body stream.
+      if (err.name === 'AbortError' || signal?.aborted) {
+        logTrace(`chatStreamed() — aborted mid-stream after ${content.length} chars; returning partial response`);
+        return {
+          content,
+          tool_calls: toolCalls.length
+            ? toolCalls.map((s) => ({
+                id: s.id,
+                type: 'function' as const,
+                function: { name: s.name, arguments: s.args },
+              }))
+            : undefined,
+        };
+      }
+      throw err;
     }
 
     logTrace(`chatStreamed() — done in ${Date.now() - callStart}ms, content=${content.length} chars, tool_calls=${toolCalls.length}`);

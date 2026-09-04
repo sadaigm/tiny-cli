@@ -7,6 +7,7 @@ import {
   ToolCall,
   AskUserPayload,
   AskUserResponse,
+  ToolDefinition,
 } from "./types.js";
 import { ModelClient } from "./model/client.js";
 import { ToolRegistry } from "./tools/registry.js";
@@ -58,6 +59,60 @@ import {
   planCompaction,
   buildCompactedHistory,
 } from "./compact_utils.js";
+
+/**
+ * Fallback for small local models that emit tool calls as text (often
+ * ```json-fenced) instead of native tool_calls. Only whole-message or lone
+ * fenced-block JSON is considered — never JSON embedded mid-prose — and the
+ * parsed name/arguments must validate against the tool definitions available
+ * in the current mode, so legitimate JSON-data replies pass through untouched.
+ */
+function extractTextToolCalls(
+  content: string,
+  toolDefinitions: ToolDefinition[]
+): ToolCall[] {
+  const trimmed = content.trim();
+  if (!trimmed) return [];
+
+  // Candidates: the whole message, or each fenced block if the message is
+  // otherwise just fences + whitespace/prose-free separators.
+  const candidates: string[] = [];
+  const fenceRegex = /```[a-zA-Z]*\s*([\s\S]*?)```/g;
+  const fences = [...trimmed.matchAll(fenceRegex)].map(m => m[1].trim());
+  const withoutFences = trimmed.replace(fenceRegex, '').trim();
+  if (fences.length > 0 && withoutFences === '') {
+    candidates.push(...fences);
+  } else {
+    candidates.push(trimmed);
+  }
+
+  const byName = new Map(toolDefinitions.map(d => [d.name, d]));
+  const calls: ToolCall[] = [];
+  for (const candidate of candidates) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
+    const def = byName.get(parsed.name);
+    if (!def) continue;
+    let args = parsed.arguments ?? parsed.parameters ?? {};
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { continue; }
+    }
+    if (typeof args !== 'object' || args === null || Array.isArray(args)) continue;
+    const props = def.parameters?.properties;
+    if (props && !Object.keys(args).every(k => k in props)) continue;
+    calls.push({
+      id: `text_fallback_${calls.length}_${Date.now()}`,
+      type: 'function',
+      function: { name: def.name, arguments: JSON.stringify(args) },
+    });
+  }
+  return calls;
+}
 
 export class Agent {
   private model: ModelClient;
@@ -290,6 +345,7 @@ GUIDANCE FOR PLAN EXECUTION:
 
     while (iteration < maxIterations) {
       if (signal?.aborted) {
+        logDebug('[trace] agent.run: signal aborted at loop top — returning cancellation');
         return { content: "Execution cancelled by user.", steps };
       }
 
@@ -331,6 +387,7 @@ GUIDANCE FOR PLAN EXECUTION:
           onReasoning
         );
       } catch (error: any) {
+        logDebug(`[trace] agent.run model call threw: name=${error?.name} message=${error?.message} aborted=${signal?.aborted}`);
         if (signal?.aborted) {
           return { content: "Execution cancelled by user.", steps };
         }
@@ -350,6 +407,22 @@ GUIDANCE FOR PLAN EXECUTION:
       }
       consecutiveModelErrors = 0;
       const modelChatMs = performance.now() - modelStart;
+
+      // Opt-in fallback: some small local models emit tool calls as text JSON
+      // instead of native tool_calls. Promote them to real tool calls so they
+      // execute; only active when settings.textToolCallFallback is true.
+      if (
+        this.config.textToolCallFallback === true &&
+        (!response.tool_calls || response.tool_calls.length === 0) &&
+        response.content
+      ) {
+        const textCalls = extractTextToolCalls(response.content, toolDefinitions);
+        if (textCalls.length > 0) {
+          logDebug(`textToolCallFallback: extracted ${textCalls.length} tool call(s) from response text`);
+          response.tool_calls = textCalls;
+          response.content = '';
+        }
+      }
 
       this.messages.push({
         role: "assistant",

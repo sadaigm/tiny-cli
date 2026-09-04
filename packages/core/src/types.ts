@@ -59,6 +59,8 @@ export interface AgentConfig {
   logLevel?: LogLevel;
   requestTimeoutMs?: number;
   maxIterations?: number;
+  /** Execute tool calls that small local models emit as text JSON instead of native tool_calls. Defaults to false. */
+  textToolCallFallback?: boolean;
   /** Token count at which the agent compacts older conversation history into a summary. Defaults to 35000. */
   compactionThresholdTokens?: number;
   /** Number of recent tokens kept raw (not summarized) during memory compaction. Defaults to 8000. */
