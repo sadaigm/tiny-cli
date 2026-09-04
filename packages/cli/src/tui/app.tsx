@@ -34,7 +34,7 @@ import { bindingFor, matchesBinding } from './keybindings.js';
 const HELP_KEY_LINES: string[] = [
   'Enter        submit · Shift+Enter newline · ↑/↓ recall input history',
   'Ctrl+R       search input history (Enter accepts · Esc cancels)',
-  'Ctrl+P       browse mode (↑/↓ scroll · Tab expand · y copy · Esc back)',
+  'Ctrl+P       browse mode (↑/↓ move · Tab expand · → enter · ← fold · y copy · Esc back)',
   'Ctrl+S       switch session (opens the /session picker)',
   'Esc          abort the running turn',
   'Ctrl+C ×2    exit (Ctrl+D exits immediately)',

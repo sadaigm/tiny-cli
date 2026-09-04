@@ -36,7 +36,7 @@ export interface ToolSummary {
  *
  * @returns The parsed args, or `null` if the string is not valid JSON / empty.
  */
-function parseArgs(toolArgs?: string): Record<string, unknown> | null {
+export function parseArgs(toolArgs?: string): Record<string, unknown> | null {
   if (!toolArgs) return null;
   try {
     const parsed = JSON.parse(toolArgs);

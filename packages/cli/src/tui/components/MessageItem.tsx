@@ -10,6 +10,7 @@ import {
 import { splitLinks } from '../utils/links.js';
 import { markdownToLines } from '../utils/markdown.js';
 import MarkdownBody from './MarkdownBody.js';
+import { toolView, type SpecLine } from './toolViews/index.js';
 import { getTheme } from '../theme.js';
 
 /**
@@ -49,6 +50,12 @@ export interface MessageItemProps {
    * (`● Agent · gist … meta`) is the single header for the whole turn.
    */
   inTurn?: boolean;
+  /**
+   * Mouse interaction: a left-click (mousedown) on the entry's header row
+   * toggles expand/collapse — same effect as Tab on the focused entry.
+   * Only meaningful for collapsible types (tool/tool_result/reasoning).
+   */
+  onToggle?: () => void;
 }
 
 /** Icon prefix for each log entry type. */
@@ -99,7 +106,9 @@ function formatTiming(timing?: LogEntry['timing']): string {
 }
 
 /**
- * Renders a tool summary header (collapsed) or header + detail (expanded).
+ * Renders a tool summary header (collapsed) or header + styled body
+ * (expanded). The body comes from the per-tool view registry
+ * ({@link toolViews}) as pre-wrapped, pre-clipped spec lines.
  *
  * Used for both `tool_call` and `tool_result` entries via their respective
  * summarizers from {@link toolSummary}.
@@ -111,15 +120,15 @@ function renderToolSummary(
   timing: string,
   expanded: boolean,
   focused: boolean,
-  columns: number,
-  clip?: (text: string) => string,
+  bodyLines: SpecLine[],
+  onToggle?: () => void,
 ): React.ReactElement {
   const marker = focused ? '▸ ' : '  ';
   const hint = !expanded && summary.hiddenLineCount > 1 ? `  ⤤ +${summary.hiddenLineCount} lines` : '';
 
   return (
     <Box flexDirection="column">
-      <Box>
+      <Box onMouseDown={onToggle ? () => onToggle() : undefined}>
         <Text color={color}>
           {marker}
           {icon} {summary.header}
@@ -127,12 +136,16 @@ function renderToolSummary(
         <Text dimColor>
           {hint}
           {timing}
-          {expanded && summary.detail ? '  ⤤ collapse' : ''}
+          {expanded && bodyLines.length > 0 ? '  ⤤ collapse' : ''}
         </Text>
       </Box>
-      {expanded && summary.detail ? (
-        <Box marginLeft={3}>
-          <Text dimColor>{clip ? clip(wrapIndent(summary.detail, 0, columns - 3)) : wrapIndent(summary.detail, 0, columns - 3)}</Text>
+      {expanded && bodyLines.length > 0 ? (
+        <Box marginLeft={3} flexDirection="column">
+          {bodyLines.map((l, i) => (
+            <Text key={i} color={l.color} dimColor={l.dim}>
+              {l.text}
+            </Text>
+          ))}
         </Box>
       ) : null}
     </Box>
@@ -195,6 +208,7 @@ export default function MessageItem({
   lineOffset = 0,
   maxLines,
   inTurn = false,
+  onToggle,
 }: MessageItemProps): React.ReactElement {
   const color = entryColors()[entry.type];
   const timing = formatTiming(entry.timing);
@@ -209,16 +223,24 @@ export default function MessageItem({
     return lines.slice(lineOffset, lineOffset + maxLines).join('\n');
   };
 
+  // Same windowing for tool-view spec lines (see toolViews/index.tsx).
+  const sliceSpec = (lines: SpecLine[]): SpecLine[] =>
+    maxLines === undefined ? lines : lines.slice(lineOffset, lineOffset + maxLines);
+
   // --- Tool call: smart summary, one-line when collapsed ---
   if (entry.type === 'tool_call') {
     const summary = summarizeToolCall(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_call, color, timing, expanded, focused, columns, clip);
+    const view = toolView(entry.toolName);
+    const lines = view.body(entry, columns);
+    return renderToolSummary(summary, ICONS.tool_call, color, timing, expanded, focused, sliceSpec(lines), onToggle);
   }
 
   // --- Tool result: first line when collapsed, full when expanded ---
   if (entry.type === 'tool_result') {
     const summary = summarizeToolResult(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_result, color, timing, expanded, focused, columns, clip);
+    const view = toolView(entry.toolName);
+    const lines = view.body(entry, columns);
+    return renderToolSummary(summary, ICONS.tool_result, color, timing, expanded, focused, sliceSpec(lines), onToggle);
   }
 
   // --- Reasoning: streams in full while its entry is live (thinking
@@ -234,7 +256,7 @@ export default function MessageItem({
     const hiddenHint = showFull || fullLines.length <= 1 ? '' : `  ⤤ +${fullLines.length - 1} lines`;
     return (
       <Box flexDirection="column">
-        <Box>
+        <Box onMouseDown={onToggle ? () => onToggle() : undefined}>
           <Text color={color}>
             {marker}
             {ICONS[entry.type]} thinking{expanded ? '  ⤤ collapse' : ''}

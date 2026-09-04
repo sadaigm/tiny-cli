@@ -12,7 +12,7 @@ import React, {
 import { Box, Text, useInput, useStdout } from '../compat.js';
 import type { LogEntry } from '../state.js';
 import MessageItem, { MAX_STANDARD_BODY_LINES } from './MessageItem.js';
-import { summarizeToolCall, summarizeToolResult } from '../utils/toolSummary.js';
+import { toolBodyLines } from './toolViews/index.js';
 import { markdownToLines } from '../utils/markdown.js';
 import { copyToClipboard, entryClipboardText } from '../utils/clipboard.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
@@ -221,11 +221,9 @@ function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, 
   const usable = Math.max(1, columns - BODY_INDENT);
   if (entry.type === 'tool_call' || entry.type === 'tool_result') {
     if (!expanded.has(entry.id)) return 1;
-    const detail =
-      entry.type === 'tool_call'
-        ? summarizeToolCall(entry, columns).detail
-        : summarizeToolResult(entry, columns).detail;
-    let lines = 1 + (detail ? wrappedLineCount(detail, usable) : 0);
+    // Same view the renderer draws — the registry is the single source of
+    // truth for tool body lines (toolViews/index.tsx).
+    let lines = 1 + toolBodyLines(entry, columns);
     if (lineCap !== undefined) lines = Math.min(lines, 1 + lineCap);
     return lines;
   }
@@ -269,11 +267,7 @@ function renderedBodyLines(entry: LogEntry, columns: number, expanded: Set<strin
   const usable = Math.max(1, columns - BODY_INDENT);
   if (entry.type === 'tool_call' || entry.type === 'tool_result') {
     if (!expanded.has(entry.id)) return 0;
-    const detail =
-      entry.type === 'tool_call'
-        ? summarizeToolCall(entry, columns).detail
-        : summarizeToolResult(entry, columns).detail;
-    return detail ? wrappedLineCount(detail, usable) : 0;
+    return toolBodyLines(entry, columns);
   }
   if (entry.type === 'reasoning') {
     if (entry.content.length === 0) return 0;
@@ -599,7 +593,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   // mode enabled exactly once and avoids raw-mode churn that can drop the
   // stdin readable listener and kill all input.
   const onPaneKey = useCallback(
-    (input: string, key: { ctrl?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean; home?: boolean; end?: boolean }) => {
+    (input: string, key: { ctrl?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean; home?: boolean; end?: boolean }) => {
       const n = entriesRef.current.length;
 
       // The browse-mode hotkey (Ctrl+P by default, remappable via keys.json)
@@ -654,15 +648,38 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeightRef.current - 1), length: n });
         else if (key.pageDown) dispatch({ type: 'FOCUS_DELTA', delta: paneHeightRef.current - 1, length: n });
         else if (key.tab) {
-          // Tab on a turn member folds/unfolds its whole turn; on a loose
-          // entry it keeps the per-entry expand behavior.
+          // Tab toggles whatever is focused (tree-browse-navigation-plan):
+          // on a turn header entry → fold/unfold the whole turn; on a turn
+          // child (thinking/tool) or a loose entry → expand/collapse it.
           const focused = entriesRef.current[focusIndexRef.current];
           if (focused) {
             const fg = groupEntries(entriesRef.current).find(
               (g) => g.turn && focusIndexRef.current >= g.start && focusIndexRef.current < g.end,
             );
-            if (fg) dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
+            if (fg && focusIndexRef.current === fg.start)
+              dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
             else dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
+          }
+        } else if (key.rightArrow) {
+          // → Enter: unfold the focused turn (if folded) and drop the cursor
+          // to its first child. No-op on loose entries.
+          const fg = groupEntries(entriesRef.current).find(
+            (g) => g.turn && focusIndexRef.current >= g.start && focusIndexRef.current < g.end,
+          );
+          if (fg) {
+            if (viewRef.current.folded.has(groupKey(entriesRef.current, fg)))
+              dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
+            dispatch({ type: 'FOCUS_ABS', index: fg.start + 1, length: n });
+          }
+        } else if (key.leftArrow) {
+          // ← Exit: fold the turn containing the cursor from any child,
+          // cursor lands on its header. No-op on loose entries.
+          const fg = groupEntries(entriesRef.current).find(
+            (g) => g.turn && focusIndexRef.current >= g.start && focusIndexRef.current < g.end,
+          );
+          if (fg) {
+            dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
+            dispatch({ type: 'FOCUS_ABS', index: fg.start, length: n });
           }
         } else if (matchesBinding(input, key, bindingFor('yank'))) {
           // Yank: OSC 52 copy of the focused entry's raw content (tool
@@ -755,7 +772,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       ? `↑ ${win.linesAbove} above · ↓ ${win.linesBelow} below${view.autoFollow ? ' · following' : ''}`
       : '';
   const headerText = browseMode
-    ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}${yankStatus ? '  ·  ' + yankStatus : ''}`
+    ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · → enter · ← fold · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}${yankStatus ? '  ·  ' + yankStatus : ''}`
     : `${positionHint ? positionHint + '  ·  ' : ''}Ctrl+P to browse`;
 
   // Chunk the visible window into render groups. Groups clipped by the
@@ -779,6 +796,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         lineOffset={scrollable ? view.lineOffset : 0}
         maxLines={scrollable ? budget : undefined}
         inTurn={inTurn}
+        onToggle={() => dispatch({ type: 'TOGGLE_EXPAND', id: entry.id })}
       />
     );
   };
@@ -802,7 +820,8 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       // Folded turn: one dim gist line (⌄ hints it can unfold).
       if (view.folded.has(groupKey(entries, g))) {
         out.push(
-          <Box key={`fold-${g.start}`} justifyContent="space-between">
+          <Box key={`fold-${g.start}`} justifyContent="space-between"
+            onMouseDown={() => dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entries, g) })}>
             <Text color={theme.toolResult}>
               {'● '}
               {gist ? gist.slice(0, Math.max(4, paneColumns - 24)) : 'Agent turn'}
@@ -821,7 +840,8 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       out.push(
         <Box key={`turn-${g.start}`} flexDirection="column">
           {from === g.start ? (
-            <Box justifyContent="space-between">
+            <Box justifyContent="space-between"
+              onMouseDown={() => dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entries, g) })}>
               <Text color={live ? theme.accent : theme.assistant}>
                 {'● Agent'}
                 {gist ? <Text color={theme.system}> · {gist.slice(0, Math.max(4, paneColumns - 24))}</Text> : null}
