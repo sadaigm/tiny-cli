@@ -503,6 +503,40 @@ function InputBox({
     { isActive: historyKeysActive },
   );
 
+  // --- Esc-Esc clears the draft (Claude Code style) -------------------------
+  // A single Esc leaves the draft alone (the global handler uses Esc to abort
+  // a running turn); a second Esc within the window wipes the whole input so
+  // a long draft doesn't mean holding Backspace. A transient hint confirms
+  // the first press armed the clear.
+  const [escHint, setEscHint] = useState(false);
+  const escArmedRef = useRef(0);
+  const ESC_CLEAR_MS = 800;
+  const escClearActive =
+    focus && !searchActive && !slashActive && !mentionActive && !showAutocomplete && value.length > 0;
+  useInput(
+    (_input, key) => {
+      if (!key.escape) return;
+      key.preventDefault();
+      const now = Date.now();
+      if (now - escArmedRef.current <= ESC_CLEAR_MS) {
+        setValue('');
+        pastesRef.current.clear();
+        pasteIdRef.current = 0;
+        escArmedRef.current = 0;
+        setEscHint(false);
+      } else {
+        escArmedRef.current = now;
+        setEscHint(true);
+      }
+    },
+    { isActive: escClearActive },
+  );
+  useEffect(() => {
+    if (!escHint) return;
+    const t = setTimeout(() => setEscHint(false), ESC_CLEAR_MS);
+    return () => clearTimeout(t);
+  }, [escHint]);
+
   // --- Render ---------------------------------------------------------------
 
   // --- Render ---------------------------------------------------------------
@@ -582,6 +616,7 @@ function InputBox({
           />
         </Box>
       ) : null}
+      {escHint ? <Text dimColor> Esc again to clear the draft</Text> : null}
     </Box>
   );
 }

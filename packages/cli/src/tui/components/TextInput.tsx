@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import type { TextareaRenderable } from '@opentui/core';
 import { useInput } from '../compat.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
@@ -75,9 +75,6 @@ export default function TextInput({
   // batch. Consecutive duplicate reports are no-ops: drop them.
   const lastReportedRef = useRef<string | null>(null);
   const theme = getTheme();
-  // Suppresses the sync effect for one render when the editor itself just
-  // reported this exact text (avoids a setText on every keystroke).
-  const [, forceSyncTick] = useState(0);
 
   // While the input is blurred (a modal overlay or browse mode owns the
   // keyboard), keep every key away from the focused editor renderable —
@@ -132,11 +129,19 @@ export default function TextInput({
   // External value changes (↑/↓ recall, picker insertion, paste chips, clear
   // on submit) push into the editor. Editor-originated changes already match
   // (onContentChange reported them), so the guard prevents a feedback loop.
+  // If the editor NORMALIZES the text (plainText never equals value, e.g. a
+  // trailing-newline representation), adopt the editor's version instead of
+  // setText↔onChange ping-ponging into "Maximum update depth exceeded"
+  // (seen when holding backspace).
   useEffect(() => {
     const ta = ref.current;
     if (!ta) return;
-    if (ta.plainText !== value) ta.setText(value);
-    forceSyncTick((n) => n + 1);
+    if (ta.plainText === value) return;
+    ta.setText(value);
+    if (ta.plainText !== value) {
+      lastReportedRef.current = ta.plainText;
+      onChange(ta.plainText);
+    }
   }, [value]);
 
   // When focus is (re)gained, place the cursor at the end.
