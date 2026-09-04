@@ -1,8 +1,7 @@
 import { defineConfig } from 'vitest/config';
-import react from '@vitejs/plugin-react-swc';
 
 export default defineConfig({
-  plugins: [react()],
+  esbuild: { jsx: 'automatic', jsxImportSource: '@opentui/react' },
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx'],

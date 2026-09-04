@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout } from '../compat.js';
 
 interface PlanConfirmModalProps {
   /** Number of incomplete tasks found in `current_task.md`. */

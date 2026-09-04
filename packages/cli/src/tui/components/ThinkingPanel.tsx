@@ -1,5 +1,5 @@
 import React, { useSyncExternalStore } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from '../compat.js';
 import { wrapIndent } from '../utils/toolSummary.js';
 import { useStreamStore } from './StreamProvider.js';
 import { renderBodyWithLinks } from './MessageItem.js';

@@ -9,7 +9,7 @@ import React, {
   forwardRef,
   useSyncExternalStore,
 } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout } from '../compat.js';
 import type { LogEntry } from '../state.js';
 import MessageItem, { MAX_STANDARD_BODY_LINES } from './MessageItem.js';
 import { summarizeToolCall, summarizeToolResult } from '../utils/toolSummary.js';
@@ -62,6 +62,11 @@ export interface MessageLogProps {
   agentRunning?: boolean;
   /** Number of queued messages, shown on the in-pane status strip. */
   queuedCount?: number;
+  /**
+   * Whether native wheel scrolling drives the pane focus (replaces the old
+   * StdinMouseBridge; OpenTUI delivers mouse events natively).
+   */
+  mouseEnabled?: boolean;
 }
 
 /** Clamp a value into the inclusive range [min, max]. */
@@ -471,11 +476,15 @@ function computeWindow(
   };
 }
 
-// ─── Home/End raw-sequence detection (Ink's Key omits these) ───────────
+// ─── Home/End detection ────────────────────────────────────────────────
+// OpenTUI reports these as canonical key names; the raw-sequence checks
+// remain as a legacy-terminal fallback.
 
-const isHome = (input: string): boolean =>
+const isHome = (input: string, key?: { home?: boolean }): boolean =>
+  Boolean(key?.home) ||
   input === '\x1B[H' || input === '\x1B[1~' || input === '\x1B[7~' || input === '\x1BOH';
-const isEnd = (input: string): boolean =>
+const isEnd = (input: string, key?: { end?: boolean }): boolean =>
+  Boolean(key?.end) ||
   input === '\x1B[F' || input === '\x1B[4~' || input === '\x1B[8~' || input === '\x1BOF';
 
 /**
@@ -493,7 +502,7 @@ const isEnd = (input: string): boolean =>
  * ```
  */
 const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function MessageLog(
-  { entries, maxHeight, active = false, browseMode = false, onBrowseModeChange, agentRunning = false, queuedCount = 0 },
+  { entries, maxHeight, active = false, browseMode = false, onBrowseModeChange, agentRunning = false, queuedCount = 0, mouseEnabled = true },
   ref,
 ): React.ReactElement {
   const { stdout } = useStdout();
@@ -590,7 +599,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   // mode enabled exactly once and avoids raw-mode churn that can drop the
   // stdin readable listener and kill all input.
   const onPaneKey = useCallback(
-    (input: string, key: { ctrl?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean }) => {
+    (input: string, key: { ctrl?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean; home?: boolean; end?: boolean }) => {
       const n = entriesRef.current.length;
 
       // The browse-mode hotkey (Ctrl+P by default, remappable via keys.json)
@@ -666,8 +675,8 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
               ok ? `📋 copied ${text.length} chars` : '⚠ copy needs a TTY (stdout redirected)',
             );
           }
-        } else if (isHome(input)) dispatch({ type: 'FOCUS_ABS', index: 0, length: n });
-        else if (isEnd(input)) dispatch({ type: 'FOCUS_ABS', index: n - 1, length: n, rearm: true });
+        } else if (isHome(input, key)) dispatch({ type: 'FOCUS_ABS', index: 0, length: n });
+        else if (isEnd(input, key)) dispatch({ type: 'FOCUS_ABS', index: n - 1, length: n, rearm: true });
       }
       // Outside browse mode this hook claims nothing — printable chars,
       // arrows, and Tab all pass through to the InputBox unchanged.
@@ -849,7 +858,21 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     // never grows with its content. No flexGrow — the parent gives it an
     // exact row budget. computeWindow limits visibleEntries to fit.
     <Box flexDirection="column">
-      <Box flexDirection="column" height={paneHeight} overflowY="hidden">
+      <Box
+        flexDirection="column"
+        height={paneHeight}
+        overflowY="hidden"
+        onMouseScroll={
+          mouseEnabled
+            ? (event: { scroll: { direction: string } }) => {
+                // Native wheel (replaces StdinMouseBridge): up = older (-1),
+                // down = newer (+1), one focus step per event like the bridge.
+                const delta = event.scroll.direction === 'up' ? -1 : 1;
+                dispatchWheel(delta);
+              }
+            : undefined
+        }
+      >
         <Text dimColor> {headerText}</Text>
         {renderChunks()}
         {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}

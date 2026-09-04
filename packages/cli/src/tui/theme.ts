@@ -51,9 +51,9 @@ export interface Theme {
 /**
  * Built-in palette (chat-redesign: dark slate, amber accent, teal tools).
  *
- * ANSI names rather than exact hex: the web renderer (ink-web) ships a chalk
- * shim without `.hex`, so hex defaults would crash the browser build. Hex
- * remains valid in `theme.json` for truecolor terminal users.
+ * ANSI names rather than exact hex (kept from the ink-web era): OpenTUI maps
+ * named colours onto its palette. Hex remains valid in `theme.json` for
+ * truecolor terminal users.
  */
 export const DEFAULT_THEME: Theme = {
   user: 'green',

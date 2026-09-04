@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { Agent, AgentStep, ToolCall } from '@tiny-cli/core';
 import { SessionManager } from '@tiny-cli/core';
 import { logError } from '@tiny-cli/core';
+import { logDebug } from '@tiny-cli/core';
 import type { AskUserPayload, AskUserResponse } from '@tiny-cli/core';
 import type { StreamStore } from '../streamStore.js';
 import type {
@@ -399,6 +400,7 @@ export function useAgent({
    */
   const runAgentTurn = useCallback(
     async (input: string, spinnerPrefix?: string): Promise<void> => {
+      logDebug(`[trace] runAgentTurn enter: mode=${planExecutingRef.current ? 'agent(plan-exec)' : getMode()}, input="${input.slice(0, 60)}…"`);
       const turnStartedAt = Date.now();
       isRunningRef.current = true;
       const abortController = new AbortController();
@@ -420,6 +422,7 @@ export function useAgent({
           if (step.toolCall) {
             // Tool execution begins — the streaming phases are over:
             // commit them so the log order stays thinking → text → tool.
+            logDebug('[trace] runAgentTurn onStep: toolCall detected — committing live stream');
             finishStreaming();
             addLog({
               type: 'tool_call',
@@ -466,6 +469,7 @@ export function useAgent({
             return true;
           }
           if (decision === 'abort') {
+            logDebug('[trace] onApproval: user chose abort — calling abortController.abort()');
             abortController.abort();
           }
           // 'cancel' or 'abort' → deny
@@ -492,6 +496,7 @@ export function useAgent({
           streamStore.appendThinking(delta);
         };
 
+        logDebug('[trace] runAgentTurn: calling agent.run()');
         const response = await agent.run(
           input,
           onStep,
@@ -503,6 +508,7 @@ export function useAgent({
           onReasoning,
           showQuestionnaire,
         );
+        logDebug(`[trace] runAgentTurn: agent.run() resolved (content=${response.content?.length ?? 0} chars)`);
 
         // Log the final assistant response (if non-empty). When the whole
         // text already streamed into the live entry, re-adding the blob
@@ -560,7 +566,7 @@ export function useAgent({
                     const deferred = createDeferred<boolean>();
                     planConfirmDeferredRef.current = deferred;
                     setState({ pendingPlanConfirm: { taskCount: tasks.length } });
-                    deferred.promise.then(resolve);
+                    deferred.promise.then(resolve).catch((e) => logDebug(`[trace] planConfirm deferred rejected: ${(e as Error)?.message}`));
                   });
               setState({ pendingPlanConfirm: null });
               if (execute) {
@@ -583,6 +589,7 @@ export function useAgent({
           }
         }
       } catch (err: unknown) {
+        logDebug(`[trace] runAgentTurn catch: name=${(err as Error)?.name ?? 'unknown'} message=${(err as Error)?.message ?? String(err)} aborted=${abortController.signal.aborted}`);
         finishStreaming();
         streamStore.setSpinner(false, '');
         const message = err instanceof Error ? err.message : String(err);
@@ -636,7 +643,7 @@ export function useAgent({
           content: display,
         });
         // Fire-and-forget: do NOT await — keeps render cycle non-blocking
-        void runAgentTurn(trimmed);
+        runAgentTurn(trimmed).catch((e) => logDebug(`[trace] runAgentTurn (submit) unhandled: name=${(e as Error)?.name} message=${(e as Error)?.message}`));
       }
     },
     [addLog, setState, runAgentTurn],
@@ -650,7 +657,16 @@ export function useAgent({
    */
   const abortCurrentRun = useCallback((): void => {
     if (abortRef.current) {
-      abortRef.current.abort();
+      logDebug('[trace] abortCurrentRun: abort triggered');
+      try {
+        abortRef.current.abort();
+      } catch (err: unknown) {
+        // An abort listener can throw synchronously (e.g. node-fetch emits
+        // 'error' on the body stream when no listener is attached yet) —
+        // that must not escape into the key handler / unhandledRejection.
+        logError(`abortCurrentRun: abort() threw: ${(err as Error)?.name}: ${(err as Error)?.message}\n${(err as Error)?.stack ?? ''}`);
+      }
+      logDebug('[trace] abortCurrentRun: abort() returned cleanly');
     }
   }, []);
 
@@ -690,6 +706,8 @@ export function useAgent({
   const executePlan = useCallback((): void => {
     // Fire-and-forget async IIFE
     void (async (): Promise<void> => {
+      logDebug('[trace] executePlan: start');
+      try {
       if (planExecutingRef.current || isRunningRef.current) {
         addLog({
           type: 'system',
@@ -758,10 +776,12 @@ CRITICAL INSTRUCTIONS:
 5. Do NOT execute tests, builds, or dev servers for this task — WRITE tests alongside the code only. Test execution happens once, in the plan's final verification task (or manually by the user). Exception: if this IS the final verification task, run the full suite now and fix failures.`;
 
           // Run the agent turn (fire-and-forget but we await inside this IIFE)
+          logDebug(`[trace] executePlan: task ${i + 1}/${tasks.length} — running turn`);
           await runAgentTurn(
             prompt,
             `Executing Task ${i + 1}/${tasks.length}`,
           );
+          logDebug(`[trace] executePlan: task ${i + 1}/${tasks.length} — turn done, aborted=${abortRef.current?.signal.aborted}`);
 
           // Check abort
           if (abortRef.current?.signal.aborted) {
@@ -790,7 +810,7 @@ CRITICAL INSTRUCTIONS:
                   totalTasks: tasks.length,
                 },
               });
-              deferred.promise.then(resolve);
+              deferred.promise.then(resolve).catch((e) => logDebug(`[trace] recovery deferred rejected: ${(e as Error)?.message}`));
             });
 
             setState({ pendingRecovery: null });
@@ -834,6 +854,20 @@ CRITICAL INSTRUCTIONS:
           ? 'Plan execution aborted.'
           : 'Plan execution finished. All tasks processed.',
       });
+      } catch (err: unknown) {
+        logDebug(`[trace] executePlan catch: name=${(err as Error)?.name ?? 'unknown'} message=${(err as Error)?.message ?? String(err)}`);
+        // The IIFE is fire-and-forget — an uncaught throw here would
+        // surface as an unhandledRejection (e.g. AbortError on user abort).
+        planExecutingRef.current = false;
+        setState({ planExecuting: false, agentState: 'idle', spinnerText: '' });
+        const message = err instanceof Error ? err.message : String(err);
+        if (!(err instanceof Error && (err.name === 'AbortError' || message === 'The operation was aborted.'))) {
+          logError(`plan execution failed: ${message}`);
+          addLog({ type: 'error', content: message });
+        } else {
+          addLog({ type: 'plan', content: 'Plan execution aborted.' });
+        }
+      }
     })();
   }, [sessionId, addLog, setState, runAgentTurn]);
 

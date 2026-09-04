@@ -31,6 +31,8 @@ interface AgentProfile {
     permissionMode?: PermissionMode;
     lastSessionId?: string;
     activeSkills?: string[];
+    /** Execute tool calls that small local models emit as text JSON instead of native tool_calls. Defaults to false. */
+    textToolCallFallback?: boolean;
   };
   logLevel?: LogLevel;
   maxIterations?: number;
@@ -138,6 +140,7 @@ export async function loadConfig(): Promise<AgentConfig> {
           },
           enableSkillCommands: profile.enableSkillCommands !== false,
           lastSessionId: profile.settings?.lastSessionId,
+          textToolCallFallback: profile.settings?.textToolCallFallback === true,
           activeSkills: profile.settings?.activeSkills
         };
 

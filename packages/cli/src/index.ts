@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { Command } from 'commander';
 import { Agent, AgentStep, SessionManager, logDebug } from '@tiny-cli/core';
 import { loadConfig } from './config.js';

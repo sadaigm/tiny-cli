@@ -129,7 +129,18 @@ export function loadKeybindings(): Keybindings {
  * Mirrors the theme singleton pattern: a value that never changes
  * mid-session shouldn't be a prop threaded through the tree.
  */
-let activeBindings: Keybindings = { bindings: {}, loadedFromFile: false };
+let activeBindings: Keybindings = {
+  // Default bindings pre-parsed, so components work even before (or without)
+  // an explicit setKeybindings() call — render.tsx still installs the
+  // user's remaps at startup.
+  bindings: Object.fromEntries(
+    (Object.keys(DEFAULT_BINDINGS) as BindableAction[]).map((action) => [
+      action,
+      parseBinding(DEFAULT_BINDINGS[action]),
+    ]),
+  ),
+  loadedFromFile: false,
+};
 
 /** Install the active bindings (call once before mounting the TUI). */
 export function setKeybindings(kb: Keybindings): void {

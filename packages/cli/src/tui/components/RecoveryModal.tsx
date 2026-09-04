@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout } from '../compat.js';
 import type { PendingRecovery } from '../state.js';
 import type { RecoveryChoice } from '../hooks/useAgent.js';
 

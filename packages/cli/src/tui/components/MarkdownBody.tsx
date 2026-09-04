@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from '../compat.js';
 import type { MdLine, MdSpan } from '../utils/markdown.js';
 import { splitLinks } from '../utils/links.js';
 import { getTheme } from '../theme.js';

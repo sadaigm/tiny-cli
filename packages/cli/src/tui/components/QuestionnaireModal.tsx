@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout } from '../compat.js';
 import type { AskUserAnswer, AskUserResponse } from '@tiny-cli/core';
 import type { PendingQuestionnaire } from '../state.js';
 

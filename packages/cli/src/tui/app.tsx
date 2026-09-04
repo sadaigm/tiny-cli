@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from './compat.js';
 import { SessionManager } from '@tiny-cli/core';
 import type { Agent, Session, AgentConfig } from '@tiny-cli/core';
 
@@ -8,7 +8,6 @@ import AutocompletePopover from './components/AutocompletePopover.js';
 import Header from './components/Header.js';
 import StatusBar from './components/StatusBar.js';
 import MessageLog, { type MessageLogHandle } from './components/MessageLog.js';
-import StdinMouseBridge from './components/StdinMouseBridge.js';
 import Spinner from './components/Spinner.js';
 import { StreamProvider } from './components/StreamProvider.js';
 import { StreamStore } from './streamStore.js';
@@ -40,7 +39,6 @@ const HELP_KEY_LINES: string[] = [
   'Esc          abort the running turn',
   'Ctrl+C ×2    exit (Ctrl+D exits immediately)',
   '/  @         command / file-mention pickers',
-  '/mouse on    enable mouse-wheel scrolling',
 ];
 
 
@@ -86,9 +84,6 @@ function createInitialState(
     planExecuting: false,
     pendingPlanConfirm: null,
     pendingSelector: null,
-    // Mouse scroll is opt-in: Ink v5 reads stdin itself, so SGR mouse
-    // reports leak into the text input. Enable with `/mouse` only.
-    mouseEnabled: false,
     _config: config,
     _sessionId: sessionId,
     _permissionMode: permissionMode,
@@ -222,7 +217,7 @@ export default function App({
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  // ── Ref to the conversation pane (for mouse-wheel scrolling) ──
+  // ── Ref to the conversation pane (scroll control from global keys) ──
   const paneRef = useRef<MessageLogHandle>(null);
 
   // ── Browse mode: when on, the InputBox is hidden so the conversation pane
@@ -450,15 +445,6 @@ export default function App({
           dispatch({ type: 'SET_MODE', mode: 'plan' });
           addSystemLog('Switched to plan mode.');
           return true;
-
-        case 'mouse': {
-          // Toggle mouse-wheel scrolling of the conversation pane.
-          const arg = parts[1]?.toLowerCase();
-          const next = arg === 'on' ? true : arg === 'off' ? false : !stateRef.current.mouseEnabled;
-          dispatch({ type: 'PATCH', patch: { mouseEnabled: next } });
-          addSystemLog(`Mouse scroll ${next ? 'enabled' : 'disabled'}.`);
-          return true;
-        }
 
         case 'clear':
           agent.setHistory([]);
@@ -1326,11 +1312,6 @@ export default function App({
         </Box>
       ) : null}
 
-      {/* Mouse-wheel → conversation pane scroll (opt-in via /mouse) */}
-      <StdinMouseBridge
-        enabled={state.mouseEnabled}
-        onWheel={(d) => paneRef.current?.wheel(d)}
-      />
     </Box>
     </StreamProvider>
   );

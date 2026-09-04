@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout } from '../compat.js';
 import type { ToolCall } from '@tiny-cli/core';
 import type { ApprovalChoice } from '../hooks/useAgent.js';
 import { summarizeToolCall } from '../utils/toolSummary.js';
@@ -169,21 +169,19 @@ export default function ApprovalModal({
 
       {/* Button row — fixed single line, each button a stable cell */}
       <Box marginTop={1}>
-        {BUTTONS.map((btn, i) => (
-          <React.Fragment key={btn.key}>
-            {i === highlighted ? (
-              <Text backgroundColor={btn.color} color="black" bold>
-                {' '}
-                {btn.label} ({btn.shortcut.toUpperCase()}){' '}
-              </Text>
-            ) : (
-              <Text color={btn.color}>
-                {' '}
-                [{btn.shortcut.toUpperCase()}] {btn.label}{' '}
-              </Text>
-            )}
-          </React.Fragment>
-        ))}
+        {BUTTONS.map((btn, i) =>
+          i === highlighted ? (
+            <Text key={btn.key} backgroundColor={btn.color} color="black" bold>
+              {' '}
+              {btn.label} ({btn.shortcut.toUpperCase()}){' '}
+            </Text>
+          ) : (
+            <Text key={btn.key} color={btn.color}>
+              {' '}
+              [{btn.shortcut.toUpperCase()}] {btn.label}{' '}
+            </Text>
+          ),
+        )}
       </Box>
 
       <Text dimColor>←/→ navigate · Enter confirm · Esc cancel</Text>

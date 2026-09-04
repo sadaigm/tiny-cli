@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from '../compat.js';
 import type { LogEntry, LogEntryType } from '../state.js';
 import {
   summarizeToolCall,
@@ -23,6 +23,8 @@ export const MAX_STANDARD_BODY_LINES = 3;
  * Props for the {@link MessageItem} component.
  */
 export interface MessageItemProps {
+  /** React list key (accepted explicitly — OpenTUI's JSX types require it on props). */
+  key?: React.Key;
   /** The log entry to render. */
   entry: LogEntry;
   /** When true, this row is the focused item in the scroll viewport. */

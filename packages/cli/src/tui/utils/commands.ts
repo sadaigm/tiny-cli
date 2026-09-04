@@ -32,7 +32,6 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'queue', description: 'Show queued messages (/queue clear drops them)' },
   { name: 'clear', description: 'Clear conversation history' },
   { name: 'compact', description: 'Summarize old history to shrink context now' },
-  { name: 'mouse', description: 'Toggle mouse-wheel scrolling on/off' },
   { name: 'skills', description: 'List loaded skills and warnings' },
   { name: 'create-skill', description: 'Scaffold a new skill (/create-skill <description>)', takesArgs: true },
   { name: 'help', description: 'List commands and keyboard shortcuts' },

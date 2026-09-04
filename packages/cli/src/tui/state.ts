@@ -157,6 +157,4 @@ export interface TuiState {
   pendingPlanConfirm: PendingPlanConfirm | null;
   /** Inline selector overlay state, or null when no overlay is open. */
   pendingSelector: PendingSelector | null;
-  /** Whether mouse-wheel scrolling of the conversation pane is enabled. */
-  mouseEnabled: boolean;
 }

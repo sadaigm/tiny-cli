@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from '../compat.js';
 import { basename } from 'node:path';
 import { DEFAULT_COMPACT_THRESHOLD } from '@tiny-cli/core';
 import type { TuiMode, ContextStats } from '../state.js';

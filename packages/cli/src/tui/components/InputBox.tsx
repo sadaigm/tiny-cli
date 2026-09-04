@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { Box, Text, useInput, usePaste, useStdout } from 'ink';
+import { Box, Text, useInput, usePaste, useStdout } from '../compat.js';
 import type { TuiMode, AgentState } from '../state.js';
 import AutocompletePopover from './AutocompletePopover.js';
 import TextInput from './TextInput.js';
@@ -229,10 +229,13 @@ function InputBox({
    * TextInput; pastes almost always happen at line-end, so this matches the
    * common case.
    */
-  const handlePaste = useCallback((text: string) => {
+  const handlePaste = useCallback((text: string, evt?: { preventDefault: () => void }) => {
     // While blurred (browse mode / modal overlay), ignore pastes — the box
     // doesn't own the keyboard, so the draft must not change underneath it.
     if (!focus) return;
+    // The focused <textarea> would also insert the pasted text natively —
+    // block it; the chip below is the single insertion path.
+    evt?.preventDefault();
     // Normalise line endings up front: pastes may carry \r\n or bare \r, and a
     // bare \r overstrikes when the expanded text is later printed. Storing \n
     // keeps the content semantically identical but display-safe.
@@ -242,14 +245,16 @@ function InputBox({
     pastesRef.current.set(id, normalized);
     const chip = pasteChipText(id, countLines(normalized));
     setValue((prev) => prev + chip);
+    // The chip lands at the end of the draft — snap the editor cursor to it.
+    setCursorEndSignal((n) => n + 1);
     // A paste can't open the pickers; make sure neither is left dangling.
     setSlashActive(false);
     setMentionActive(false);
   }, []);
 
-  // Ink's usePaste owns bracketed-paste handling on a dedicated channel: it
-  // delivers the whole pasted string verbatim and keeps it OUT of useInput, so
-  // the paste never leaks into the input as raw text. We collapse it into a
+  // usePaste owns bracketed-paste handling on a dedicated channel: it delivers
+  // the whole pasted string verbatim and keeps it OUT of useInput, so the
+  // paste never leaks into the input as raw text. We collapse it into a
   // readable chip (handlePaste); the raw text is expanded back on submit.
   usePaste(handlePaste);
 
@@ -486,9 +491,11 @@ function InputBox({
   useInput(
     (_input, key) => {
       if (key.upArrow) {
+        key.preventDefault(); // keep the arrow away from the focused editor
         const recalled = historyRef.current.move(-1);
         if (recalled !== null) replaceValue(recalled);
       } else if (key.downArrow) {
+        key.preventDefault();
         const recalled = historyRef.current.move(1);
         if (recalled !== null) replaceValue(recalled);
       }

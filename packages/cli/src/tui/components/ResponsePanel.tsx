@@ -1,5 +1,5 @@
 import React, { useSyncExternalStore } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from '../compat.js';
 import { useStreamStore } from './StreamProvider.js';
 import MarkdownBody from './MarkdownBody.js';
 import { markdownToLines } from '../utils/markdown.js';
