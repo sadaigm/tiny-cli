@@ -4,21 +4,17 @@
  * Tests for the paste → chip → expand round-trip that our code owns.
  *
  * Paste detection itself (recognising `\x1b[200~`…`\x1b[201~` and delivering the
- * payload as one string) is now Ink 7's job via its `usePaste` hook — it routes
- * the whole pasted string to a handler on a dedicated channel that `useInput`
- * never sees, which is exactly what stops the old `[201~` marker leak. We don't
- * unit-test the framework's marker parsing here.
+ * payload as one string) is OpenTUI's job via its `usePaste` hook +
+ * `decodePasteBytes` — it routes the whole pasted payload to a handler on a
+ * dedicated channel that `useKeyboard` never sees. We don't unit-test the
+ * framework's marker parsing here.
  *
  * What we DO own and test below: when a paste payload (already stripped of
- * markers, as `usePaste` delivers it) arrives, `InputBox.handlePaste` collapses
- * it into a readable chip, and `expandPasteChips` restores the original text on
- * submit. We drive `handlePaste` directly with the same verbatim string Ink's
- * `usePaste` would hand it.
- *
- * Why not an ink-testing-library `stdin.write` test? ink-testing-library@4 (the
- * latest release) uses a fake stdin that doesn't drive Ink 7's
- * `'readable'`-based input loop, so `useInput`/`usePaste` never fire under it.
- * Revisit once ink-testing-library ships Ink 7 support.
+ * markers, as `usePaste` + `decodePasteBytes` deliver it) arrives,
+ * `InputBox.handlePaste` collapses it into a readable chip, and
+ * `expandPasteChips` restores the original text on submit. We drive
+ * `handlePaste` directly with the same verbatim string the compat layer would
+ * hand it.
  */
 import { describe, it, expect } from 'vitest';
 import {

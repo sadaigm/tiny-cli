@@ -1,5 +1,6 @@
 #!/bin/bash
-# Run tiny-cli directly from node
+# Run tiny-cli directly (bun — OpenTUI's native FFI needs bun or node ≥26.4
+# with --experimental-ffi)
 # Usage: ./run-direct.sh "your request" or ./run-direct.sh (for REPL)
 
 # Ensure it's built if dist doesn't exist
@@ -7,4 +8,4 @@
 #   pnpm build
 # fi
 pnpm build
-node packages/cli/dist/index.js "$@"
+bun packages/cli/dist/index.js "$@"
