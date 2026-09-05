@@ -157,4 +157,12 @@ export interface TuiState {
   pendingPlanConfirm: PendingPlanConfirm | null;
   /** Inline selector overlay state, or null when no overlay is open. */
   pendingSelector: PendingSelector | null;
+  /**
+   * Runtime overrides applied by the session switcher (formerly a
+   * `declare module` augmentation in app.tsx): when set they win over the
+   * boot-time props from the initial config/session.
+   */
+  _config?: import('@tiny-cli/core').AgentConfig;
+  _sessionId?: string;
+  _permissionMode?: 'notify' | 'auto-edit' | 'auto';
 }
