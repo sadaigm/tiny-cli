@@ -5,6 +5,8 @@ import AutocompletePopover from './AutocompletePopover.js';
 import TextInput from './TextInput.js';
 import { searchFiles } from '../../file-mention.js';
 import { SLASH_COMMANDS, type SlashCommand } from '../utils/commands.js';
+import { usePickers } from './input/usePickers.js';
+import { useHistorySearch } from './input/useHistorySearch.js';
 import {
   pasteChipText,
   countLines,
@@ -193,30 +195,24 @@ function InputBox({
   // picker-detection logic without a use-effect feedback loop.
   const handleChangeRef = useRef<((next: string) => void) | null>(null);
 
-  // --- @file-mention picker (local state) ----------------------------------
-
-  // --- @file-mention picker (local state) ----------------------------------
+  // --- Slash-command + @file-mention pickers (input/usePickers.ts) --------
   // The picker is owned entirely by the input: typing `@` opens it, further
   // chars filter it, ↑/↓ navigate, Enter/Tab accept (inserting `[@path]`),
   // Esc closes. The `[@path]` token is expanded into file contents by
   // `hydrateMessage()` on submit.
-  const [mentionActive, setMentionActive] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState('');
-
-  const mentionItems = useMemo(
-    () => (mentionActive ? searchFiles(fileIndex, mentionQuery) : []),
-    [mentionActive, mentionQuery, fileIndex],
-  );
-
-  /** Extract the `@query` at the end of `text`, or null if none. */
-  const trailingMention = useCallback((text: string): string | null => {
-    const at = text.lastIndexOf('@');
-    if (at === -1) return null;
-    const after = text.slice(at + 1);
-    // The query ends at the first whitespace or another @.
-    if (/\s/.test(after) || after.includes('@')) return null;
-    return after;
-  }, []);
+  const {
+    mentionActive,
+    mentionQuery,
+    mentionItems,
+    setMentionActive,
+    slashActive,
+    slashQuery,
+    slashItems,
+    setSlashActive,
+    acceptMention,
+    acceptSlash,
+    detectPickers,
+  } = usePickers({ fileIndex, onSubmit, setValue, setCursorEndSignal });
 
   /**
    * Handle a paste: store the raw text and append a readable chip token to the
@@ -262,78 +258,11 @@ function InputBox({
     (next: string) => {
       setValue(next);
       historyRef.current.saveDraft(next);
-      // `/` at the very start of the input opens the command picker.
-      if (next.startsWith('/')) {
-        setSlashActive(true);
-        setSlashQuery(next.slice(1));
-        setMentionActive(false);
-        return;
-      }
-      setSlashActive(false);
-      // `@` anywhere opens the file-mention picker.
-      if (fileIndex.length === 0) return;
-      const query = trailingMention(next);
-      if (query === null) {
-        setMentionActive(false);
-      } else {
-        setMentionActive(true);
-        setMentionQuery(query);
-      }
+      detectPickers(next);
     },
-    [fileIndex.length, trailingMention],
+    [detectPickers],
   );
   handleChangeRef.current = handleChange;
-
-  /** Replace the trailing `@query` with a `[@path]` token and close picker. */
-  const acceptMention = useCallback(
-    (filePath: string) => {
-      setValue((prev) => {
-        const at = prev.lastIndexOf('@');
-        if (at === -1) return prev;
-        return `${prev.slice(0, at)}[@${filePath}] `;
-      });
-      setMentionActive(false);
-      setMentionQuery('');
-      setCursorEndSignal((n) => n + 1);
-    },
-    [],
-  );
-
-  // --- /command picker (local state) ---------------------------------------
-  // Mirrors the @file picker: typing `/` at the start of the (empty) input
-  // opens a menu of commands; further chars filter; ↑/↓ navigate; Enter/Tab
-  // runs the command (clears the input and submits `/name`).
-  const [slashActive, setSlashActive] = useState(false);
-  const [slashQuery, setSlashQuery] = useState('');
-
-  const slashItems: SlashCommand[] = useMemo(() => {
-    if (!slashActive) return [];
-    const q = slashQuery.toLowerCase();
-    const matches = q === '' ? SLASH_COMMANDS : SLASH_COMMANDS.filter((c) => c.name.includes(q));
-    return matches;
-  }, [slashActive, slashQuery]);
-
-  /** Run a slash command: clear input, close picker, submit `/name`.
-   *  Commands that take arguments are inserted for completion instead. */
-  const acceptSlash = useCallback(
-    (cmdValue: string) => {
-      // Extract command name from the value (e.g., "/agent" -> "agent")
-      const cmdName = cmdValue.replace(/^\//, '');
-      const cmd = SLASH_COMMANDS.find(c => `/${c.name}` === cmdValue);
-
-      setSlashActive(false);
-      setSlashQuery('');
-      setValue('');
-
-      if (cmd?.takesArgs) {
-        setValue(`/${cmd.name} `);
-        setCursorEndSignal((n) => n + 1);
-      } else {
-        onSubmit(cmdValue);
-      }
-    },
-    [onSubmit],
-  );
 
   // Notify the parent when ANY picker opens/closes so it can yield keys
   // (the conversation pane must not also claim ↑/↓ while a picker is up).
@@ -343,95 +272,29 @@ function InputBox({
     );
   }, [mentionActive, mentionItems.length, slashActive, slashItems.length, onMentionActiveChange]);
 
-  // --- Ctrl+R reverse-i-search ---------------------------------------------
+  // --- Ctrl+R reverse-i-search (input/useHistorySearch.ts) -----------------
   // While active, the input line is replaced by a search prompt: typing
   // edits the query, Ctrl+R steps to the next-older match, ↑/↓ pick a
-  // match by recency, Enter accepts (recall + close + focus for edits),
-  // Esc cancels back to the pre-search draft. Accepted results are never
-  // auto-submitted — the user gets to edit first, like a shell.
-  const [searchActive, setSearchActive] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchOffset, setSearchOffset] = useState(0);
-  // Draft saved on entry so Esc restores exactly what was typed.
-  const searchDraftRef = useRef('');
-  // Mirror for synchronous reads: Ctrl+R + Enter arriving in one stdin
-  // chunk would otherwise act on a stale offset.
-  const searchOffsetRef = useRef(0);
-  searchOffsetRef.current = searchOffset;
-
-  const searchResult = useMemo(
-    () => (searchActive ? searchHistory(historyRef.current.toArray(), searchQuery, searchOffset) : null),
-    [searchActive, searchQuery, searchOffset],
-  );
-
-  const closeSearch = useCallback((accepted: string | null) => {
-    const restore = accepted ?? searchDraftRef.current;
-    setSearchActive(false);
-    setSearchQuery('');
-    setSearchOffset(0);
-    if (accepted !== null) {
-      // Route the accepted line through the same change path as ↑/↓ recall
-      // so `/` and `@` pickers react to it identically.
-      replaceValue(accepted);
-    } else {
-      setValue(restore);
-      handleChangeRef.current?.(restore);
-    }
-  }, [replaceValue]);
-
-  const openSearch = useCallback(() => {
-    searchDraftRef.current = value;
-    // Pickers can't coexist with the search prompt — close both so their
-    // key hooks and popovers stand down.
-    setSlashActive(false);
-    setMentionActive(false);
-    setSearchActive(true);
-    setSearchQuery('');
-    setSearchOffset(0);
-  }, [value]);
+  // match by recency, Enter accepts, Esc cancels back to the pre-search
+  // draft. Accepted results are never auto-submitted.
+  const { searchActive, searchQuery, searchResult, openSearch } = useHistorySearch({
+    historyRef,
+    value,
+    focus,
+    showAutocomplete,
+    slashActive,
+    mentionActive,
+    replaceValue,
+    handleChangeRef,
+    setSlashActive,
+    setMentionActive,
+  });
 
   // Notify the parent so the app-level Esc handler (abort turn) yields
   // while the search prompt owns Esc (cancel search).
   React.useEffect(() => {
     onSearchActiveChange?.(searchActive);
   }, [searchActive, onSearchActiveChange]);
-
-  const searchKeysActive =
-    focus && searchActive && !slashActive && !mentionActive && !showAutocomplete;
-  useInput(
-    (input, key) => {
-      if (key.escape) {
-        closeSearch(null);
-        return;
-      }
-      if (key.return) {
-        closeSearch(searchResult ? searchResult.entry : null);
-        return;
-      }
-      if ((key.ctrl && input === 'r') || key.upArrow) {
-        // Step to the next-older match (or scroll newer with ↑).
-        if (searchResult) {
-          setSearchOffset(searchOffsetRef.current + (key.upArrow ? -1 : 1));
-        }
-        return;
-      }
-      if (key.downArrow) {
-        if (searchResult) setSearchOffset(searchOffsetRef.current + 1);
-        return;
-      }
-      if (key.backspace) {
-        const next = searchQuery.slice(0, -1);
-        setSearchQuery(next);
-        setSearchOffset(0);
-        return;
-      }
-      if (input && !key.ctrl && !key.meta) {
-        setSearchQuery((q) => q + input);
-        setSearchOffset(0);
-      }
-    },
-    { isActive: searchKeysActive },
-  );
 
   // --- Submit logic --------------------------------------------------------
 
