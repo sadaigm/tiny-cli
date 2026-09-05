@@ -1,179 +1,31 @@
-import { useCallback, useEffect, useRef } from 'react';
-import type { Agent, AgentStep, ToolCall } from '@tiny-cli/core';
-import { SessionManager } from '@tiny-cli/core';
-import { logError } from '@tiny-cli/core';
-import { logDebug } from '@tiny-cli/core';
-import type { AskUserPayload, AskUserResponse } from '@tiny-cli/core';
-import type { StreamStore } from '../streamStore.js';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import type { Agent, AskUserResponse } from '@tiny-cli/core';
+import { logError, logDebug } from '@tiny-cli/core';
+import { MessageQueue } from '../utils/messageQueue.js';
+import { createDeferred, type Deferred } from '../utils/deferred.js';
 import type {
-  TuiMode,
-  LogEntry,
-  LogEntryType,
-  PendingQuestionnaire,
-  PendingRecovery,
-  PendingPlanConfirm,
-} from '../state.js';
-import {
-  MessageQueue,
-} from '../utils/messageQueue.js';
-import {
-  createDeferred,
-  type Deferred,
-} from '../utils/deferred.js';
-import {
-  readPlanTaskFile,
-  writePlanTaskFile,
-  readPlanFile,
-  parseIncompleteTasks,
-  isTaskMarkedComplete,
-  markTaskCompleteInContent,
-} from '../utils/planReader.js';
+  AgentRefs,
+  ApprovalChoice,
+  RecoveryChoice,
+  UseAgentApi,
+  UseAgentProps,
+} from './agentTypes.js';
+import { createSaveSession, wireAgentEvents } from './sessionSync.js';
+import { createApprovals } from './approvals.js';
+import { createRunTurn } from './runTurn.js';
+import { createPlanExecution } from './planExecution.js';
 
-// ─── Constants ──────────────────────────────────────────────────────
-
-/**
- * Minimum turn duration (ms) before a completion bell fires — quick
- * replies don't need to chirp, only turns long enough that the user may
- * have tabbed away.
- */
-const BELL_MIN_TURN_MS = 10_000;
-
-// ─── Types ─────────────────────────────────────────────────────────
-
-/**
- * A partial log entry that the consumer fills with `id` and `timestamp`
- * before adding to the log array.
- */
-export interface NewLogEntry {
-  type: LogEntryType;
-  content: string;
-  toolName?: string;
-  toolArgs?: string;
-  toolResult?: string;
-  timing?: { modelChatMs?: number; toolCallMs?: number };
-  queued?: boolean;
-  /** True while this entry is actively streaming (live reasoning). */
-  live?: boolean;
-  /**
-   * Pre-reserved entry id (from the App's `reserveLogId`), used for the
-   * live streaming assistant entry so later deltas can find it.
-   */
-  _id?: string;
-}
-
-/**
- * The user's choice when asked to approve a tool call.
- *
- * - `'approve'` — run this single tool call.
- * - `'approve-session'` — switch permission mode to `'auto'` for the
- *   remainder of the session and run this call.
- * - `'cancel'` — skip this call (agent receives a denial message).
- * - `'abort'` — abort the entire agent turn via `AbortController`.
- */
-export type ApprovalChoice = 'approve' | 'approve-session' | 'cancel' | 'abort';
-
-/**
- * Choices available when a plan-execution task is not marked as complete
- * by the agent.  Shown in the {@link RecoveryModal}.
- *
- * - `'retry'`   — Re-run the current task.
- * - `'manual'`  — Manually mark the task as complete in the task file.
- * - `'skip'`    — Skip this task and move to the next one.
- * - `'stop'`    — Abort plan execution entirely.
- */
-export type RecoveryChoice = 'retry' | 'manual' | 'skip' | 'stop';
-
-/**
- * Imperative state patcher provided by the parent `<App>` component.
- * The hook calls this to update `agentState`, `spinnerText`,
- * `pendingApproval`, `contextStats`, and the message-queue display.
- */
-export interface UseAgentSetState {
-  (patch: UseAgentStatePatch): void;
-}
-
-/** Subset of `TuiState` that the hook is allowed to mutate. */
-export interface UseAgentStatePatch {
-  agentState?: 'idle' | 'running' | 'awaiting_approval' | 'error';
-  spinnerText?: string;
-  pendingApproval?: ToolCall | null;
-  pendingQuestions?: PendingQuestionnaire | null;
-  messageQueue?: string[];
-  contextStats?: { tokens: number; characters: number };
-  pendingRecovery?: PendingRecovery | null;
-  planExecuting?: boolean;
-  pendingPlanConfirm?: PendingPlanConfirm | null;
-}
-
-/** Callback the hook calls whenever a new log entry is produced. */
-export type AddLogFn = (entry: NewLogEntry) => void;
-
-/** Callback the hook calls when it needs the current mode. */
-export type GetModeFn = () => TuiMode;
-
-// ─── Hook ──────────────────────────────────────────────────────────
-
-/**
- * Props for the {@link useAgent} hook.
- */
-export interface UseAgentProps {
-  /** The initialised Agent instance (already has `.init()` called). */
-  agent: Agent;
-  /** SessionManager for persisting conversation history. */
-  sessionManager: SessionManager;
-  /** Session ID for save/load operations. */
-  sessionId: string;
-  /** Imperative state patcher. */
-  setState: UseAgentSetState;
-  /** Called for every new log entry (tool calls, results, assistant text…). */
-  addLog: AddLogFn;
-  /** Returns the current execution mode at call-time. */
-  getMode: GetModeFn;
-  /** Switches the active execution mode (e.g. plan → agent after executing). */
-  setMode: (mode: TuiMode) => void;
-  /**
-   * External store for live streaming content. Thinking/response deltas
-   * are concatenated here (re-rendering only the small subscribed
-   * panels), and committed back via addLog once when each phase ends.
-   */
-  streamStore: StreamStore;
-}
-
-/**
- * The public API returned by {@link useAgent}.
- */
-export interface UseAgentApi {
-  /**
-   * Submit a user message.
-   *
-   * If the agent is idle, runs the turn immediately (fire-and-forget).
-   * If the agent is busy, the message is queued and processed after the
-   * current turn completes.
-   */
-  submitMessage: (text: string, displayText?: string) => void;
-  /** Abort the current agent turn via `AbortController`. */
-  abortCurrentRun: () => void;
-  /**
-   * Discard every queued (not yet started) message.
-   *
-   * The in-flight turn, if any, is unaffected — only messages waiting in
-   * the queue are dropped. Used by `/queue clear`.
-   */
-  clearQueue: () => void;
-  /** Resolve the pending approval modal with the user's choice. */
-  resolveApproval: (choice: ApprovalChoice) => void;
-  /** Resolve the pending questionnaire modal with the user's answers. */
-  resolveQuestionnaire: (response: AskUserResponse) => void;
-  /**
-   * Execute the active plan: iterate over incomplete tasks, run each
-   * through the agent, and handle recovery when tasks aren't marked done.
-   */
-  executePlan: () => void;
-  /** Resolve the pending recovery modal with the user's choice. */
-  resolveRecovery: (choice: RecoveryChoice) => void;
-  /** Resolve the pending plan-execute confirm modal with the user's choice. */
-  resolvePlanConfirm: (execute: boolean) => void;
-}
+export type {
+  NewLogEntry,
+  ApprovalChoice,
+  RecoveryChoice,
+  UseAgentSetState,
+  UseAgentStatePatch,
+  AddLogFn,
+  GetModeFn,
+  UseAgentProps,
+  UseAgentApi,
+} from './agentTypes.js';
 
 /**
  * Core agent lifecycle hook implementing the **concurrent execution
@@ -185,18 +37,23 @@ export interface UseAgentApi {
  * while the agent works, with messages either executing immediately
  * (idle) or being queued (busy).
  *
- * Key mechanisms:
+ * Key mechanisms (each in its own module under `hooks/`):
  *
- * - **Message queue** — a {@link MessageQueue} holds messages submitted
+ * - **Message queue** — a `MessageQueue` holds messages submitted
  *   while the agent is running.  After each turn, the queue is drained
- *   recursively.
+ *   recursively (`runTurn.ts`).
  * - **Abort** — an `AbortController` is recreated for each turn;
  *   `abortCurrentRun()` calls `.abort()` on it.
  * - **Approval modal** — `agent.run()`'s `onApproval` callback creates
- *   a {@link Deferred} promise, sets `pendingApproval` state, and
- *   awaits the promise.  The UI calls `resolveApproval()` to settle it.
+ *   a `Deferred` promise, sets `pendingApproval` state, and awaits the
+ *   promise (`approvals.ts`).
+ * - **Plan execution** — the task-file loop with recovery modals
+ *   (`planExecution.ts`).
  * - **Session save** — after each turn, `agent.getHistory()` is
- *   persisted via {@link SessionManager}.
+ *   persisted via `SessionManager` (`sessionSync.ts`).
+ *
+ * The shared mutable refs live here and are passed explicitly to the
+ * modules (no React contexts).
  *
  * @example
  * ```tsx
@@ -243,8 +100,8 @@ export function useAgent({
   const questionnaireDeferredRef = useRef<Deferred<AskUserResponse> | null>(null);
 
   /**
-   * Latest `executePlan` — lets the earlier-defined `runAgentTurn`
-   * call it without a circular dependency in the useCallback chain.
+   * Latest `executePlan` — lets `runAgentTurn` call it without a
+   * circular dependency in the callback chain.
    */
   const executePlanRef = useRef<() => void>(() => {});
 
@@ -259,364 +116,74 @@ export function useAgent({
    */
   const isRunningRef = useRef(false);
 
+  // One stable AgentRefs bundle for the hook modules.
+  const refsRef = useRef<AgentRefs | null>(null);
+  if (!refsRef.current) {
+    refsRef.current = {
+      queueRef,
+      abortRef,
+      approvalDeferredRef,
+      recoveryDeferredRef,
+      planConfirmDeferredRef,
+      questionnaireDeferredRef,
+      executePlanRef,
+      planExecutingRef,
+      isRunningRef,
+    };
+  }
+  const refs = refsRef.current;
+
   // ── Real-time context stats & visible compaction ────────────────
 
   // Recompute stats after every message appended to the agent's history,
   // and surface compactions as a system log line.
-  useEffect(() => {
-    agent.onHistoryChange = () => {
-      try {
-        setState({ contextStats: agent.getContextStats() });
-      } catch {
-        // ignore
-      }
-    };
-    agent.onCompaction = (before, after) => {
-      addLog({
-        type: 'system',
-        content: `Memory compacted: ${before.toLocaleString()} → ${after.toLocaleString()} tokens`,
-      });
-    };
-    agent.onModelError = (err) => {
-      addLog({
-        type: 'error',
-        content: `Model request failed: ${err.message} — continuing`,
-      });
-    };
-    return () => {
-      agent.onHistoryChange = undefined;
-      agent.onCompaction = undefined;
-      agent.onModelError = undefined;
-    };
-  }, [agent, setState, addLog]);
+  useEffect(() => wireAgentEvents(agent, setState, addLog), [agent, setState, addLog]);
 
-  // ── Internal helpers ────────────────────────────────────────────
+  // ── Module wiring ───────────────────────────────────────────────
 
-  /**
-   * Persist the agent's conversation history and update context stats.
-   */
-  const saveSession = useCallback(async (): Promise<void> => {
-    try {
-      const messages = agent.getHistory();
-      // Create-on-first-save: if the file doesn't exist yet (startup no
-      // longer pre-writes an empty one), persist instead of silently
-      // dropping the whole conversation.
-      const session =
-        (await sessionManager.loadSession(sessionId)) ??
-        SessionManager.createSession(sessionId);
-      session.messages = messages;
-      session.metadata.lastUpdatedAt = new Date().toISOString();
-      await sessionManager.saveSession(session);
-    } catch {
-      // Session save failure is non-fatal
-    }
-
-    // Update context stats for the status bar
-    try {
-      const stats = agent.getContextStats();
-      setState({ contextStats: stats });
-    } catch {
-      // ignore
-    }
-  }, [agent, sessionManager, sessionId, setState]);
-
-  /**
-   * Display the approval modal and return the user's decision via a
-   * deferred promise.
-   *
-   * Called synchronously by `agent.run()`'s `onApproval` callback.
-   * Sets `pendingApproval` state so the `<ApprovalModal>` renders,
-   * then awaits `approvalDeferredRef.current.promise`.  The UI calls
-   * `resolveApproval()` to settle the promise.
-   */
-  const showApprovalModal = useCallback(
-    async (call: ToolCall): Promise<ApprovalChoice> => {
-      const deferred = createDeferred<ApprovalChoice>();
-      approvalDeferredRef.current = deferred;
-
-      setState({
-        agentState: 'awaiting_approval',
-        pendingApproval: call,
-      });
-
-      const result = await deferred.promise;
-
-      setState({
-        agentState: 'running',
-        pendingApproval: null,
-      });
-
-      return result;
-    },
-    [setState],
+  const saveSession = useMemo(
+    () => createSaveSession({ agent, sessionManager, sessionId, setState }),
+    [agent, sessionManager, sessionId, setState],
   );
 
-  /**
-   * Display the questionnaire modal and return the user's answers via a
-   * deferred promise.
-   *
-   * Called synchronously by `agent.run()`'s `onAskUser` callback.
-   * Sets `pendingQuestions` state so `<QuestionnaireModal>` renders,
-   * then awaits `questionnaireDeferredRef.current.promise`.  The UI
-   * calls `resolveQuestionnaire()` to settle the promise.
-   */
-  const showQuestionnaire = useCallback(
-    async (payload: AskUserPayload): Promise<AskUserResponse> => {
-      const deferred = createDeferred<AskUserResponse>();
-      questionnaireDeferredRef.current = deferred;
-
-      setState({
-        agentState: 'awaiting_approval',
-        pendingQuestions: { payload, currentIndex: 0, answers: [] },
-      });
-
-      const result = await deferred.promise;
-
-      setState({
-        agentState: 'running',
-        pendingQuestions: null,
-      });
-
-      return result;
-    },
-    [setState],
+  const { showApprovalModal, showQuestionnaire, resolveApproval, resolveQuestionnaire } = useMemo(
+    () => createApprovals({ setState, refs }),
+    // refs is a stable bundle (same object every render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setState, refs],
   );
 
-  /**
-   * Run a single agent turn.
-   *
-   * This is an async function that runs as a **background task** — it
-   * is never awaited by the React render cycle.  It:
-   *
-   * 1. Creates a fresh `AbortController`.
-   * 2. Calls `agent.run()` with `onStep` (stream to log) and
-   *    `onApproval` (deferred-promise modal) callbacks.
-   * 3. Logs the assistant response.
-   * 4. Persists the session.
-   * 5. Drains the queue: if there are queued messages, runs the next
-   *    one recursively; otherwise returns to idle.
-   *
-   * Errors are caught, logged, and the agent returns to idle.
-   */
-  const runAgentTurn = useCallback(
-    async (input: string, spinnerPrefix?: string): Promise<void> => {
-      logDebug(`[trace] runAgentTurn enter: mode=${planExecutingRef.current ? 'agent(plan-exec)' : getMode()}, input="${input.slice(0, 60)}…"`);
-      const turnStartedAt = Date.now();
-      isRunningRef.current = true;
-      const abortController = new AbortController();
-      abortRef.current = abortController;
-      const mode = planExecutingRef.current ? 'agent' : getMode();
-
-      setState({ agentState: 'running' });
-      streamStore.setSpinner(true, spinnerPrefix ? `${spinnerPrefix}…` : 'Thinking…');
-      // Finish the live phases cleanly: the accumulated thinking/response
-      // text is committed to the log (once) and the panels stop rendering.
-      const finishStreaming = (): void => {
-        streamStore.commitThinking();
-        streamStore.commitResponse();
-      };
-
-      try {
-        // onStep — stream tool calls / results to the log immediately
-        const onStep = (step: AgentStep): void => {
-          if (step.toolCall) {
-            // Tool execution begins — the streaming phases are over:
-            // commit them so the log order stays thinking → text → tool.
-            logDebug('[trace] runAgentTurn onStep: toolCall detected — committing live stream');
-            finishStreaming();
-            addLog({
-              type: 'tool_call',
-              content: step.toolCall.function.name,
-              toolName: step.toolCall.function.name,
-              toolArgs: step.toolCall.function.arguments,
-              timing: step.timing,
-            });
-
-            if (step.toolResult !== undefined) {
-              addLog({
-                type: 'tool_result',
-                content: step.toolResult,
-                toolResult: step.toolResult,
-                toolName: step.toolCall.function.name,
-                timing: step.timing,
-              });
-            }
-
-            streamStore.setSpinner(true, spinnerPrefix ? `${spinnerPrefix}…` : 'Working…');
-          }
-        };
-
-        // onApproval — show modal, await user decision
-        const onApproval = async (call: ToolCall): Promise<boolean> => {
-          const decision = await showApprovalModal(call);
-
-          if (decision === 'approve') {
-            return true;
-          }
-          if (decision === 'approve-session') {
-            // Switch to auto mode for the rest of the session
-            const config = agent.getConfig();
-            agent.updateConfig({ ...config, permissionMode: 'auto' });
-            try {
-              const session = await sessionManager.loadSession(sessionId);
-              if (session) {
-                session.metadata.permissionMode = 'auto';
-                await sessionManager.saveSession(session);
-              }
-            } catch {
-              // non-fatal
-            }
-            return true;
-          }
-          if (decision === 'abort') {
-            logDebug('[trace] onApproval: user chose abort — calling abortController.abort()');
-            abortController.abort();
-          }
-          // 'cancel' or 'abort' → deny
-          return false;
-        };
-
-        // onText — stream assistant text into the live response panel.
-        // If streaming isn't available (no callback wired, or the stream
-        // fell back to buffered), the final response below still lands as
-        // a normal entry.
-        let streamedAnything = false;
-        const onText = (delta: string): void => {
-          // First text delta — the thinking phase is over: commit it as a
-          // collapsed reasoning entry so it stays above the response.
-          streamStore.commitThinking();
-          streamedAnything = true;
-          streamStore.appendResponse(delta);
-        };
-
-        // onReasoning — stream the model's thinking into the live thinking
-        // panel, separate from the assistant text. Concatenation happens in
-        // the store; only that panel re-renders per delta.
-        const onReasoning = (delta: string): void => {
-          streamStore.appendThinking(delta);
-        };
-
-        logDebug('[trace] runAgentTurn: calling agent.run()');
-        const response = await agent.run(
-          input,
-          onStep,
-          mode,
-          true, // continueSession
-          abortController.signal,
-          onApproval,
-          onText,
-          onReasoning,
-          showQuestionnaire,
-        );
-        logDebug(`[trace] runAgentTurn: agent.run() resolved (content=${response.content?.length ?? 0} chars)`);
-
-        // Log the final assistant response (if non-empty). When the whole
-        // text already streamed into the live entry, re-adding the blob
-        // would duplicate it — skip unless the stream produced nothing
-        // (fallback path) or the final content is new.
-        if (
-          response.content &&
-          response.content.trim() &&
-          !(response.streamedFinal && streamedAnything)
-        ) {
-          addLog({
-            type: 'assistant',
-            content: response.content,
-          });
-        }
-
-        // Persist session history
-        await saveSession();
-
-        // Commit the streamed response as a normal assistant entry (the
-        // fallback blob above was skipped when the stream produced it).
-        finishStreaming();
-        streamStore.setSpinner(false, '');
-
-        // ── Queue drain ──────────────────────────────────────────
-        const nextMessage = queueRef.current.dequeue();
-        if (nextMessage) {
-          // Update queue display
-          setState({ messageQueue: queueRef.current.toArray() });
-          // Log the de-queued message (no longer "queued" tag)
-          addLog({
-            type: 'user',
-            content: nextMessage,
-          });
-          // Recurse to run the next turn
-          await runAgentTurn(nextMessage, spinnerPrefix);
-        } else {
-          isRunningRef.current = false;
-          setState({
-            agentState: 'idle',
-            spinnerText: '',
-            messageQueue: [],
-          });
-          // Plan-mode turn just finished with a written plan — execute it
-          // (port of the old REPL's "Execute this plan?" flow). In `auto`
-          // permission mode the user already granted execution, so start
-          // immediately without the confirm modal; otherwise ask first.
-          if (mode === 'plan') {
-            const tasks = parseIncompleteTasks(await readPlanTaskFile(sessionId));
-            if (tasks.length > 0) {
-              const autoMode = agent.getConfig().permissionMode === 'auto';
-              const execute = autoMode
-                ? true
-                : await new Promise<boolean>((resolve) => {
-                    const deferred = createDeferred<boolean>();
-                    planConfirmDeferredRef.current = deferred;
-                    setState({ pendingPlanConfirm: { taskCount: tasks.length } });
-                    deferred.promise.then(resolve).catch((e) => logDebug(`[trace] planConfirm deferred rejected: ${(e as Error)?.message}`));
-                  });
-              setState({ pendingPlanConfirm: null });
-              if (execute) {
-                // Switch to agent mode, then kick off execution — same
-                // sequence as the old REPL (executeActivePlan → mode=agent).
-                setMode('agent');
-                addLog({
-                  type: 'system',
-                  content: 'Switched to agent mode.',
-                });
-                executePlanRef.current();
-              }
-            }
-          }
-          // Terminal bell: long turns often finish while the user has
-          // tabbed away — BEL snaps the tab/title indicator. Fire only
-          // after a meaningful run so quick replies don't chirp.
-          if (Date.now() - turnStartedAt >= BELL_MIN_TURN_MS) {
-            process.stdout.write('\x07');
-          }
-        }
-      } catch (err: unknown) {
-        logDebug(`[trace] runAgentTurn catch: name=${(err as Error)?.name ?? 'unknown'} message=${(err as Error)?.message ?? String(err)} aborted=${abortController.signal.aborted}`);
-        finishStreaming();
-        // User abort (Esc) is a normal end of turn, not a failure — the old
-        // path logged it as [ERROR] with a stack, spamming the log.
-        if ((err as Error)?.name === 'AbortError' || abortController.signal.aborted) {
-          streamStore.setSpinner(false, '');
-          addLog({ type: 'system', content: 'Turn aborted.' });
-          isRunningRef.current = false;
-          setState({ agentState: 'idle', spinnerText: '', messageQueue: queueRef.current.toArray() });
-          return;
-        }
-        streamStore.setSpinner(false, '');
-        const message = err instanceof Error ? err.message : String(err);
-        logError(`agent turn failed: ${message}\n${err instanceof Error ? err.stack ?? '' : ''}`);
-        addLog({
-          type: 'error',
-          content: message,
-        });
-        isRunningRef.current = false;
-        setState({
-          agentState: 'idle',
-          spinnerText: '',
-          messageQueue: queueRef.current.toArray(),
-        });
-      }
-    },
-    [agent, setState, addLog, getMode, setMode, streamStore, showApprovalModal, saveSession, sessionManager, sessionId],
+  const runAgentTurn = useMemo(
+    () =>
+      createRunTurn({
+        agent,
+        sessionManager,
+        sessionId,
+        setState,
+        addLog,
+        getMode,
+        setMode,
+        streamStore,
+        refs,
+        showApprovalModal,
+        showQuestionnaire,
+        saveSession,
+      }),
+    // Mirrors the original useCallback dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [agent, setState, addLog, getMode, setMode, streamStore, showApprovalModal, saveSession, sessionManager, sessionId, refs],
   );
+
+  const { executePlan, resolveRecovery, resolvePlanConfirm } = useMemo(
+    () => createPlanExecution({ sessionId, setState, addLog, runAgentTurn, refs }),
+    // Mirrors the original useCallback dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionId, addLog, setState, runAgentTurn, refs],
+  );
+
+  // Keep the ref pointing at the latest executePlan so runAgentTurn
+  // (defined above it) can call it without a circular useCallback dep.
+  executePlanRef.current = executePlan;
 
   // ── Public API ──────────────────────────────────────────────────
 
@@ -678,263 +245,6 @@ export function useAgent({
       logDebug('[trace] abortCurrentRun: abort() returned cleanly');
     }
   }, []);
-
-  /**
-   * Resolve the pending approval modal.
-   *
-   * Called by `<ApprovalModal>` when the user selects an option.
-   * Settles the deferred promise, unblocking `agent.run()`'s
-   * `onApproval` callback.
-   */
-  const resolveApproval = useCallback(
-    (choice: ApprovalChoice): void => {
-      const deferred = approvalDeferredRef.current;
-      if (deferred) {
-        approvalDeferredRef.current = null;
-        deferred.resolve(choice);
-      }
-    },
-    [],
-  );
-
-  /**
-   * Execute the active plan: iterate over incomplete tasks, run each
-   * through the agent, and handle recovery when tasks aren't marked done.
-   *
-   * Ported from `executeActivePlan()` in `repl.ts`, adapted for the
-   * Ink/React TUI.  Each task is run via `runAgentTurn` with a special
-   * execution prompt, and tool approvals flow through the same
-   * `showApprovalModal` deferred-promise mechanism.  After each turn,
-   * the task file is re-read to check whether the agent called
-   * `mark_task_complete`.  If not, a recovery modal is shown.
-   *
-   * The entire loop runs as a fire-and-forget background task — it
-   * is never awaited by the render cycle.  The InputBox stays live
-   * so the user can type while tasks execute.
-   */
-  const executePlan = useCallback((): void => {
-    // Fire-and-forget async IIFE
-    void (async (): Promise<void> => {
-      logDebug('[trace] executePlan: start');
-      try {
-      if (planExecutingRef.current || isRunningRef.current) {
-        addLog({
-          type: 'system',
-          content: 'Cannot start plan execution — agent is already busy.',
-        });
-        return;
-      }
-
-      let taskFileContent = await readPlanTaskFile(sessionId);
-      const tasks = parseIncompleteTasks(taskFileContent);
-      if (tasks.length === 0) {
-        addLog({
-          type: 'system',
-          content: 'No incomplete tasks found in the plan.',
-        });
-        return;
-      }
-
-      planExecutingRef.current = true;
-      setState({ planExecuting: true });
-      addLog({
-        type: 'system',
-        content: `Found ${tasks.length} pending tasks to execute.`,
-      });
-
-      const planContent = await readPlanFile(sessionId);
-      let abortExecution = false;
-
-      for (let i = 0; i < tasks.length; i++) {
-        if (abortExecution) break;
-        const task = tasks[i];
-        // A previous turn may have batch-completed later tasks (execution
-        // prompt allows one mark_task_complete per finished task) — skip
-        // those without burning an agent turn on them.
-        if (isTaskMarkedComplete(taskFileContent, task.text)) {
-          addLog({
-            type: 'system',
-            content: `Task ${i + 1}/${tasks.length} already completed — skipping.`,
-          });
-          continue;
-        }
-        addLog({
-          type: 'plan',
-          content: `[Executing Task ${i + 1}/${tasks.length}] ${task.text}`,
-        });
-
-        // Retry loop for the same task
-        let retry = true;
-        while (retry && !abortExecution) {
-          retry = false;
-
-          const prompt = `You are in execution mode.
-Your goal is to implement the task described below.
-
-Your CURRENT task to implement is EXACTLY:
-${task.raw}
-
-Plan Context:
-${planContent}
-
-CRITICAL INSTRUCTIONS:
-1. When you have successfully implemented and verified the task, you MUST call the 'mark_task_complete' tool.
-2. If you do not call 'mark_task_complete', the task will be marked as FAILED or INCOMPLETE.
-3. Only call 'mark_task_complete' if the code is actually written and tested.
-4. If finishing this task also fully completes the next small task(s) in the plan, call 'mark_task_complete' for each of those too — do not leave trivial follow-up tasks for later turns.
-5. Do NOT execute tests, builds, or dev servers for this task — WRITE tests alongside the code only. Test execution happens once, in the plan's final verification task (or manually by the user). Exception: if this IS the final verification task, run the full suite now and fix failures.`;
-
-          // Run the agent turn (fire-and-forget but we await inside this IIFE)
-          logDebug(`[trace] executePlan: task ${i + 1}/${tasks.length} — running turn`);
-          await runAgentTurn(
-            prompt,
-            `Executing Task ${i + 1}/${tasks.length}`,
-          );
-          logDebug(`[trace] executePlan: task ${i + 1}/${tasks.length} — turn done, aborted=${abortRef.current?.signal.aborted}`);
-
-          // Check abort
-          if (abortRef.current?.signal.aborted) {
-            abortExecution = true;
-            break;
-          }
-
-          // Re-read the task file to check if task was marked complete
-          taskFileContent = await readPlanTaskFile(sessionId);
-          const isComplete = isTaskMarkedComplete(taskFileContent, task.text);
-
-          if (isComplete) {
-            addLog({
-              type: 'system',
-              content: `Task ${i + 1}/${tasks.length} completed.`,
-            });
-          } else {
-            // Show recovery modal
-            const choice = await new Promise<RecoveryChoice>((resolve) => {
-              const deferred = createDeferred<RecoveryChoice>();
-              recoveryDeferredRef.current = deferred;
-              setState({
-                pendingRecovery: {
-                  taskIndex: i,
-                  taskText: task.raw,
-                  totalTasks: tasks.length,
-                },
-              });
-              deferred.promise.then(resolve).catch((e) => logDebug(`[trace] recovery deferred rejected: ${(e as Error)?.message}`));
-            });
-
-            setState({ pendingRecovery: null });
-
-            switch (choice) {
-              case 'retry':
-                retry = true;
-                break;
-              case 'manual': {
-                const manualContent = markTaskCompleteInContent(
-                  await readPlanTaskFile(sessionId),
-                  task.text,
-                );
-                await writePlanTaskFile(sessionId, manualContent);
-                taskFileContent = manualContent;
-                addLog({
-                  type: 'plan',
-                  content: `Task ${i + 1}/${tasks.length} marked as done manually.`,
-                });
-                break;
-              }
-              case 'skip':
-                addLog({
-                  type: 'plan',
-                  content: `Task ${i + 1}/${tasks.length} skipped.`,
-                });
-                break;
-              case 'stop':
-                abortExecution = true;
-                break;
-            }
-          }
-        }
-      }
-
-      planExecutingRef.current = false;
-      setState({ planExecuting: false });
-      addLog({
-        type: 'plan',
-        content: abortExecution
-          ? 'Plan execution aborted.'
-          : 'Plan execution finished. All tasks processed.',
-      });
-      } catch (err: unknown) {
-        logDebug(`[trace] executePlan catch: name=${(err as Error)?.name ?? 'unknown'} message=${(err as Error)?.message ?? String(err)}`);
-        // The IIFE is fire-and-forget — an uncaught throw here would
-        // surface as an unhandledRejection (e.g. AbortError on user abort).
-        planExecutingRef.current = false;
-        setState({ planExecuting: false, agentState: 'idle', spinnerText: '' });
-        const message = err instanceof Error ? err.message : String(err);
-        if (!(err instanceof Error && (err.name === 'AbortError' || message === 'The operation was aborted.'))) {
-          logError(`plan execution failed: ${message}`);
-          addLog({ type: 'error', content: message });
-        } else {
-          addLog({ type: 'plan', content: 'Plan execution aborted.' });
-        }
-      }
-    })();
-  }, [sessionId, addLog, setState, runAgentTurn]);
-
-  /**
-   * Resolve the pending recovery modal.
-   *
-   * Called by `<RecoveryModal>` when the user selects an option.
-   * Settles the deferred promise, unblocking `executePlan`.
-   */
-  const resolveRecovery = useCallback(
-    (choice: RecoveryChoice): void => {
-      const deferred = recoveryDeferredRef.current;
-      if (deferred) {
-        recoveryDeferredRef.current = null;
-        deferred.resolve(choice);
-      }
-    },
-    [],
-  );
-
-  /**
-   * Resolve the pending plan-execute confirm modal.
-   *
-   * Called by `<PlanConfirmModal>` when the user selects an option.
-   * Settles the deferred promise, unblocking `runAgentTurn`.
-   */
-  const resolvePlanConfirm = useCallback(
-    (execute: boolean): void => {
-      const deferred = planConfirmDeferredRef.current;
-      if (deferred) {
-        planConfirmDeferredRef.current = null;
-        deferred.resolve(execute);
-      }
-    },
-    [],
-  );
-
-  /**
-   * Resolve the pending questionnaire modal.
-   *
-   * Called by `<QuestionnaireModal>` when the user answers all questions
-   * or skips.  Settles the deferred promise, unblocking `agent.run()`'s
-   * `onAskUser` callback.
-   */
-  const resolveQuestionnaire = useCallback(
-    (response: AskUserResponse): void => {
-      const deferred = questionnaireDeferredRef.current;
-      if (deferred) {
-        questionnaireDeferredRef.current = null;
-        deferred.resolve(response);
-      }
-    },
-    [],
-  );
-
-  // Keep the ref pointing at the latest executePlan so runAgentTurn
-  // (defined above it) can call it without a circular useCallback dep.
-  executePlanRef.current = executePlan;
 
   /**
    * Discard every queued message. The in-flight turn keeps running.
