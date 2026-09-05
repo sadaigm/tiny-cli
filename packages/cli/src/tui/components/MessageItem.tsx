@@ -4,6 +4,7 @@ import type { LogEntry, LogEntryType } from '../state.js';
 import {
   summarizeToolCall,
   summarizeToolResult,
+  truncate,
   wrapIndent,
   type ToolSummary,
 } from '../utils/toolSummary.js';
@@ -120,18 +121,24 @@ function renderToolSummary(
   timing: string,
   expanded: boolean,
   focused: boolean,
+  columns: number,
   bodyLines: SpecLine[],
   onToggle?: () => void,
 ): React.ReactElement {
   const marker = focused ? '▸ ' : '  ';
   const hint = !expanded && summary.hiddenLineCount > 1 ? `  ⤤ +${summary.hiddenLineCount} lines` : '';
+  // The header row is a single line: header + hint + timing + collapse tag
+  // must fit `columns` or the overflowing row paints over the body below
+  // (garbled interleaved text) — truncate the header to what's left.
+  const suffix = `${hint}${timing}${expanded && bodyLines.length > 0 ? '  ⤤ collapse' : ''}`;
+  const header = truncate(summary.header, Math.max(4, columns - marker.length - icon.length - 1 - suffix.length));
 
   return (
     <Box flexDirection="column">
       <Box onMouseDown={onToggle ? () => onToggle() : undefined}>
         <Text color={color}>
           {marker}
-          {icon} {summary.header}
+          {icon} {header}
         </Text>
         <Text dimColor>
           {hint}
@@ -232,7 +239,7 @@ export default function MessageItem({
     const summary = summarizeToolCall(entry, columns);
     const view = toolView(entry.toolName);
     const lines = view.body(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_call, color, timing, expanded, focused, sliceSpec(lines), onToggle);
+    return renderToolSummary(summary, ICONS.tool_call, color, timing, expanded, focused, columns, sliceSpec(lines), onToggle);
   }
 
   // --- Tool result: first line when collapsed, full when expanded ---
@@ -240,7 +247,7 @@ export default function MessageItem({
     const summary = summarizeToolResult(entry, columns);
     const view = toolView(entry.toolName);
     const lines = view.body(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_result, color, timing, expanded, focused, sliceSpec(lines), onToggle);
+    return renderToolSummary(summary, ICONS.tool_result, color, timing, expanded, focused, columns, sliceSpec(lines), onToggle);
   }
 
   // --- Reasoning: streams in full while its entry is live (thinking

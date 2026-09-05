@@ -591,6 +591,15 @@ export function useAgent({
       } catch (err: unknown) {
         logDebug(`[trace] runAgentTurn catch: name=${(err as Error)?.name ?? 'unknown'} message=${(err as Error)?.message ?? String(err)} aborted=${abortController.signal.aborted}`);
         finishStreaming();
+        // User abort (Esc) is a normal end of turn, not a failure — the old
+        // path logged it as [ERROR] with a stack, spamming the log.
+        if ((err as Error)?.name === 'AbortError' || abortController.signal.aborted) {
+          streamStore.setSpinner(false, '');
+          addLog({ type: 'system', content: 'Turn aborted.' });
+          isRunningRef.current = false;
+          setState({ agentState: 'idle', spinnerText: '', messageQueue: queueRef.current.toArray() });
+          return;
+        }
         streamStore.setSpinner(false, '');
         const message = err instanceof Error ? err.message : String(err);
         logError(`agent turn failed: ${message}\n${err instanceof Error ? err.stack ?? '' : ''}`);

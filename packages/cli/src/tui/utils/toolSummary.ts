@@ -49,7 +49,7 @@ export function parseArgs(toolArgs?: string): Record<string, unknown> | null {
 }
 
 /** Shorten a string to `max` characters with an ellipsis. */
-function truncate(value: string, max: number): string {
+export function truncate(value: string, max: number): string {
   const single = value.replace(/\s+/g, ' ').trim();
   return single.length > max ? `${single.slice(0, max - 1)}…` : single;
 }

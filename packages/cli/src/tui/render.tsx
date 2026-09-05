@@ -38,6 +38,9 @@ export async function startTui(opts: StartTuiOptions): Promise<void> {
   });
   process.on('unhandledRejection', (reason) => {
     const r = reason as any;
+    // User aborts (Esc) reject in-flight fetches; some paths (detached
+    // stream readers) escape without a catch. Expected — trace, not ERROR.
+    if (r?.name === 'AbortError') return;
     // Walk the cause chain — the top-level reason often wraps the original
     // failure (fetch abort, tool error) that the surfaced message hides.
     const causes: string[] = [];
