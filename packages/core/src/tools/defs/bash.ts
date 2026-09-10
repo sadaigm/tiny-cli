@@ -6,6 +6,7 @@ import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
 import { checkBashRedirect, recordRedirectCount } from '../bashRedirect.js';
+import { checkBashBoundary } from '../bashGuard.js';
 
 export function register(registry: ToolRegistry) {
   // bash
@@ -27,6 +28,11 @@ export function register(registry: ToolRegistry) {
       '  list a dir -> `list` | edit a file -> `search_replace` | create/rewrite -> `write`',
       '',
       'This is a mutating tool (guarded by the permission system).',
+      '',
+      'WORKSPACE BOUNDARY (secured mode): file operations must stay inside the',
+      'project folder. Reading/writing outside it, reading toolchain/runtime',
+      'files as data, and touching credentials are blocked; user-level git',
+      'config (name/email) requires user consent. Scratch space: /tmp/<project>/',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -37,7 +43,7 @@ export function register(registry: ToolRegistry) {
     },
     isModifying: true
   };
-  registry.register(bashDef, async (args) => {
+  registry.register(bashDef, async (args, context) => {
     let command = args.cmd;
     if (typeof command !== 'string' || !command.trim()) {
       return 'Tool error: cmd must be a shell command string.';
@@ -50,6 +56,16 @@ export function register(registry: ToolRegistry) {
       recordRedirectCount(redirectResult.key);
       logDebug(`[tool-redirect] ${redirectResult.key}: ${command.trim()}`);
       return redirectResult.message;
+    }
+    // Workspace boundary enforcement: file operations stay inside the
+    // project folder; toolchain binaries execute but never read as data;
+    // credentials hard-block; git identity needs user consent.
+    if (context?.securedMode !== false) {
+      const boundary = await checkBashBoundary(command, context?.cwd || process.cwd(), context?.askUser);
+      if (boundary) {
+        logDebug(`[bash-guard] ${boundary.key}: ${command.trim()}`);
+        return boundary.message;
+      }
     }
     return new Promise((resolve) => {
       // A non-zero exit is data, not a tool failure: chains like

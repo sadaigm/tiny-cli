@@ -200,6 +200,45 @@ export function createSlashCommands({
           return true;
         }
 
+        case 'thinking': {
+          // /thinking [off|low|medium|high] — sets the reasoning-effort
+          // level; the wire format depends on the detected backend.
+          const { thinkingFlavor, thinkingLevels, thinkingForced } = await import('@tiny-cli/core');
+          const c = agent.getConfig();
+          const flavor = thinkingFlavor(c);
+          const levels = thinkingLevels(flavor);
+          const requested = parts[1]?.toLowerCase();
+
+          if (requested) {
+            if (!levels.includes(requested as any)) {
+              addErrorLog(`Invalid level "${requested}" for this backend (${flavor}). Available: ${levels.join(', ')}`);
+              return true;
+            }
+            const updated = { ...c, thinkingLevel: requested as any };
+            agent.updateConfig({ thinkingLevel: requested as any });
+            dispatch({ type: 'SET_CONFIG', config: updated });
+            const { saveConfig } = await import('../../config.js');
+            await saveConfig(updated);
+            addSystemLog(`Thinking level set to: ${requested} (${flavor})`);
+            if (requested === 'off' && thinkingForced(c)) {
+              addErrorLog(`Note: ${c.model} uses forced thinking — it cannot be disabled; the server will ignore the disable request.`);
+            }
+            return true;
+          }
+
+          const current = c.thinkingLevel ?? 'off';
+          dispatch({
+            type: 'OPEN_SELECTOR',
+            selector: {
+              kind: 'thinking',
+              title: `Thinking level (current: ${current} · backend: ${flavor})`,
+              items: levels,
+              selectedIndex: Math.max(0, levels.indexOf(current as any)),
+            },
+          });
+          return true;
+        }
+
         case 'mode': {
           const requested = parts[1]?.toLowerCase();
           if (requested && ['notify', 'auto-edit', 'auto'].includes(requested)) {

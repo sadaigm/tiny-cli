@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { logError, logTrace } from '@tiny-cli/core';
 import type { LogEntryType } from '../state.js';
 
 /**
@@ -106,9 +107,24 @@ export function useConsoleCapture(
     // --- Override stderr methods → 'error' entries ---
     console.error = (...args: unknown[]): void => {
       const content = formatArgs(args);
-      if (content.trim()) {
-        addLogRef.current({ type: 'error', content });
+      if (!content.trim()) return;
+      const err = args.find((a): a is Error => a instanceof Error);
+      // AbortError after a user abort (Esc) surfaces here via OpenTUI's key
+      // dispatch — expected, not an error. Trace it and render nothing;
+      // runTurn already logs "Turn aborted." as a system entry.
+      if (err?.name === 'AbortError') {
+        logTrace(`console.error (expected abort): ${err.message}`);
+        return;
       }
+      // Also write to the log file — the render.tsx console.error wrapper
+      // was replaced by this override, so without this, stderr output
+      // (e.g. OpenTUI key-handler errors) never reaches tui.log.
+      logError(
+        err
+          ? `console.error: ${err.name}: ${err.message}\n${err.stack ?? '(no stack)'}`
+          : `console.error: ${content}`,
+      );
+      addLogRef.current({ type: 'error', content });
     };
 
     console.warn = (...args: unknown[]): void => {

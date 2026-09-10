@@ -6,8 +6,12 @@
 # invoked as `sh link-global.sh`, so resolving after cd gives the wrong root)
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
+rm -rf .turbo
+rm -rf packages/cli/dist packages/cli/tsconfig.tsbuildinfo
+
 echo "🏗️ Building project..."
-pnpm build
+# --force skips the turbo cache — a stale cache hit would link old dist/ output.
+pnpm build --force
 
 echo "🔗 Linking packages/cli globally..."
 cd packages/cli

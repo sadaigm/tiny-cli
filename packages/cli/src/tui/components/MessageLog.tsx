@@ -10,6 +10,7 @@ import React, {
   useSyncExternalStore,
 } from 'react';
 import { Box, Text, useInput, useStdout } from '../compat.js';
+import { logTrace } from '@tiny-cli/core';
 import type { LogEntry } from '../state.js';
 import MessageItem from './MessageItem.js';
 import { logViewReducer, createLogView, type LogView } from './logView/reducer.js';
@@ -194,6 +195,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   // stdin readable listener and kill all input.
   const onPaneKey = useCallback(
     (input: string, key: { ctrl?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean; home?: boolean; end?: boolean }) => {
+      try {
       const n = entriesRef.current.length;
 
       // The browse-mode hotkey (Ctrl+P by default, remappable via keys.json)
@@ -297,6 +299,11 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       }
       // Outside browse mode this hook claims nothing — printable chars,
       // arrows, and Tab all pass through to the InputBox unchanged.
+      } catch (err: unknown) {
+        const e = err as Error;
+        logTrace(`[trace] onPaneKey threw: ${e?.name}: ${e?.message}\ninput=${JSON.stringify(input)} key=${JSON.stringify(key)}\n${e?.stack ?? ''}`);
+        throw err;
+      }
     },
     // Intentionally minimal: all branched-on values are read through refs
     // (see above), so re-creating the callback on every change is pointless —

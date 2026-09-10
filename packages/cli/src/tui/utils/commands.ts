@@ -22,6 +22,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'chat', description: 'Switch to conversational chat mode (no tools)' },
   { name: 'plan', description: 'Switch to read-only planning mode' },
   { name: 'model', description: 'Select a different LLM model' },
+  { name: 'thinking', description: 'Set reasoning effort (off / low / medium / high)' },
   { name: 'mode', description: 'Switch permission mode (notify / auto-edit / auto)' },
   { name: 'tools', description: 'List available tools for the current mode' },
   { name: 'usage', description: 'Show tool call counts and bash->tool redirects' },

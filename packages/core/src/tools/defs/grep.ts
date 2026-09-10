@@ -5,6 +5,7 @@ import path from 'path';
 import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
+import { guardPath } from '../bashGuard.js';
 
 /** grep tool: extensions searched by default (noise control — lockfiles,
  *  assets and vendored code stay out of results unless opted in). */
@@ -58,10 +59,14 @@ export function register(registry: ToolRegistry) {
       required: ['pattern']
     }
   };
-  registry.register(grepDef, async (args) => {
+  registry.register(grepDef, async (args, context) => {
     if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
     const target = typeof args.path === 'string' && args.path ? args.path : '.';
     const fullPath = path.resolve(process.cwd(), target);
+    if (context?.securedMode !== false) {
+      const guard = guardPath(fullPath, process.cwd());
+      if (guard) return guard;
+    }
     return new Promise((resolve) => {
       const child = execFile('grep', buildGrepArgs(args.pattern, fullPath, args.includeExcluded === true), { maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
         // grep exits 1 when there are NO matches — that is success, not an error.

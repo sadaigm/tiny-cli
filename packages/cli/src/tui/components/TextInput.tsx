@@ -1,8 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import type { TextareaRenderable } from '@opentui/core';
 import { useInput } from '../compat.js';
-import { bindingFor, matchesBinding } from '../keybindings.js';
 import { getTheme } from '../theme.js';
+import { useEditorKeys } from './input/useEditorKeys.js';
 
 /**
  * Props for the {@link TextInput} — API-compatible with the previous custom
@@ -86,37 +86,9 @@ export default function TextInput({
     { isActive: !focus },
   );
 
-  useInput(
-    (input, key) => {
-      // Enter: plain submits, Shift+Enter inserts a newline (kitty protocol
-      // distinguishes the two; on legacy terminals both submit, as before).
-      if (key.return) {
-        key.preventDefault(); // never let the editor insert its own newline
-        if (key.shift) {
-          ref.current?.insertText('\n');
-        } else {
-          onSubmit?.(ref.current?.plainText ?? valueRef.current);
-        }
-        return;
-      }
-      // The history-search hotkey (Ctrl+R by default, remappable) opens
-      // reverse-i-search of the input history.
-      if (matchesBinding(input, key, bindingFor('historySearch')) && onSearch) {
-        key.preventDefault();
-        onSearch();
-        return;
-      }
-      // Tab belongs to the pickers (accept) — never insert a tab char.
-      // Arrows are either picker/history navigation (those handlers
-      // preventDefault) or native cursor movement in a multi-line draft.
-      // Ctrl+C is handled at the app level.
-      if (key.tab) {
-        key.preventDefault();
-        return;
-      }
-    },
-    { isActive: focus },
-  );
+  // Editor key handling (Enter / Shift+Enter, Ctrl+R, Tab) lives in
+  // input/useEditorKeys.ts — only keys the focused editor must not see.
+  useEditorKeys({ ref, valueRef, onSubmit, onSearch, focus });
 
   // Focus / blur control (modal overlays steal the keyboard via focus=false).
   useEffect(() => {

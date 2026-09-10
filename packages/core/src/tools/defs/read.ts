@@ -5,6 +5,7 @@ import path from 'path';
 import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
+import { guardPath } from '../bashGuard.js';
 
 export function register(registry: ToolRegistry) {
   // read
@@ -24,9 +25,13 @@ export function register(registry: ToolRegistry) {
     }
   };
 
-  registry.register(readDef, async (args) => {
+  registry.register(readDef, async (args, context) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
     const fullPath = path.resolve(process.cwd(), args.path);
+    if (context?.securedMode !== false) {
+      const guard = guardPath(fullPath, process.cwd());
+      if (guard) return guard;
+    }
     const content = await readFile(fullPath, 'utf-8');
     const lines = content.split(/\r?\n/);
     const total = lines.length;

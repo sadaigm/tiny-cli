@@ -1,50 +1,66 @@
-import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from './compat.js';
-import { SessionManager } from '@tiny-cli/core';
-import type { Agent, Session, AgentConfig } from '@tiny-cli/core';
+import React, {
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import { Box, Text, useApp, useInput, useStdout } from "./compat.js";
+import { logTrace, SessionManager } from "@tiny-cli/core";
+import type { Agent, Session, AgentConfig } from "@tiny-cli/core";
 
-import type { TuiState, TuiMode, LogEntry, ContextStats, PendingSelector, SelectorKind } from './state.js';
-import AutocompletePopover from './components/AutocompletePopover.js';
-import Header from './components/Header.js';
-import StatusBar from './components/StatusBar.js';
-import MessageLog, { type MessageLogHandle } from './components/MessageLog.js';
-import Spinner from './components/Spinner.js';
-import { StreamProvider } from './components/StreamProvider.js';
-import { StreamStore } from './streamStore.js';
-import InputBox, { MENTION_POPOVER_ROWS } from './components/InputBox.js';
-import ApprovalModal from './components/ApprovalModal.js';
-import QuestionnaireModal from './components/QuestionnaireModal.js';
-import RecoveryModal from './components/RecoveryModal.js';
-import PlanConfirmModal from './components/PlanConfirmModal.js';
+import type {
+  TuiState,
+  TuiMode,
+  LogEntry,
+  ContextStats,
+  PendingSelector,
+  SelectorKind,
+} from "./state.js";
+import AutocompletePopover from "./components/AutocompletePopover.js";
+import Header from "./components/Header.js";
+import StatusBar from "./components/StatusBar.js";
+import MessageLog, { type MessageLogHandle } from "./components/MessageLog.js";
+import Spinner from "./components/Spinner.js";
+import { StreamProvider } from "./components/StreamProvider.js";
+import { StreamStore } from "./streamStore.js";
+import InputBox, { MENTION_POPOVER_ROWS } from "./components/InputBox.js";
+import ApprovalModal from "./components/ApprovalModal.js";
+import QuestionnaireModal from "./components/QuestionnaireModal.js";
+import RecoveryModal from "./components/RecoveryModal.js";
+import PlanConfirmModal from "./components/PlanConfirmModal.js";
 
-import { useConsoleCapture } from './hooks/useConsoleCapture.js';
-import { useAgent, type UseAgentStatePatch, type NewLogEntry } from './hooks/useAgent.js';
+import { useConsoleCapture } from "./hooks/useConsoleCapture.js";
+import {
+  useAgent,
+  type UseAgentStatePatch,
+  type NewLogEntry,
+} from "./hooks/useAgent.js";
+import { useSubmit } from "./hooks/useSubmit.js";
 
-import { hydrateMessage, buildFileIndex } from '../file-mention.js';
-import { fetchModels } from '../commands/handlers.js';
-import { SLASH_COMMANDS } from './utils/commands.js';
-import { readPlanTaskFile, parseIncompleteTasks } from './utils/planReader.js';
-import { findInLog } from './utils/logSearch.js';
-import type { Theme } from './theme.js';
-import { bindingFor, matchesBinding } from './keybindings.js';
+import { buildFileIndex } from "../file-mention.js";
+import { fetchModels } from "../commands/handlers.js";
+import { SLASH_COMMANDS } from "./utils/commands.js";
+import { findInLog } from "./utils/logSearch.js";
+import type { Theme } from "./theme.js";
+import { bindingFor, matchesBinding } from "./keybindings.js";
 
 // ─── Initial state ─────────────────────────────────────────────────
 
-
-
-/**
- * Free-form phrases that express clear intent to run the plan task-by-task
- * (not just the bare `continue` keyword). Matched against a normalized
- * (lowercased, trailing punctuation stripped) input in `handleSubmit`.
- */
-const PLAN_EXECUTION_INTENT =
-  /^(?:go|start|run|begin|proceed|execute)(?:\s+(?:the\s+)?(?:with\s+)?(?:this\s+)?plan\b|\s+task\s+by\s+task)|^task\s+by\s+task$|^execute\s+(?:the\s+)?tasks?$/;
 // ─── Extracted modules (app/) ────────────────────────────────────────
 // State reducer + initial state: app/reducer.ts. Session replay helpers:
 // app/sessionLoad.ts. Skill commands: app/skills.ts.
-import { reducer, createInitialState, type Action, type AppDispatch } from './app/reducer.js';
-import { relativeTime, createReplaySessionMessages } from './app/sessionLoad.js';
-import { createSlashCommands } from './app/slashCommands.js';
+import {
+  reducer,
+  createInitialState,
+  type Action,
+  type AppDispatch,
+} from "./app/reducer.js";
+import {
+  relativeTime,
+  createReplaySessionMessages,
+} from "./app/sessionLoad.js";
+import { createSlashCommands } from "./app/slashCommands.js";
 
 // ─── App Props ─────────────────────────────────────────────────────
 
@@ -74,7 +90,12 @@ export default function App({
 
   const [state, dispatch] = useReducer(
     reducer,
-    createInitialState(config, sessionId, initialMode, session.metadata.permissionMode || config.permissionMode || 'notify'),
+    createInitialState(
+      config,
+      sessionId,
+      initialMode,
+      session.metadata.permissionMode || config.permissionMode || "notify",
+    ),
   );
 
   // ── Refs for values needed inside callbacks ──
@@ -122,12 +143,12 @@ export default function App({
 
   // ── Imperative state patcher for useAgent ──
   const setStateForAgent = useCallback((patch: UseAgentStatePatch) => {
-    dispatch({ type: 'PATCH', patch: patch as Partial<TuiState> });
+    dispatch({ type: "PATCH", patch: patch as Partial<TuiState> });
   }, []);
 
   // ── Log helpers ──
   const addLog = useCallback((entry: NewLogEntry) => {
-    dispatch({ type: 'ADD_LOG', entry });
+    dispatch({ type: "ADD_LOG", entry });
   }, []);
 
   // ── Streaming store ──
@@ -137,7 +158,7 @@ export default function App({
   // text back here — one ADD_LOG commit per phase.
   const [streamStore] = React.useState(() => new StreamStore());
   React.useEffect(() => {
-    streamStore.onCommit = (type: 'reasoning' | 'assistant', text: string) => {
+    streamStore.onCommit = (type: "reasoning" | "assistant", text: string) => {
       addLog({ type, content: text });
     };
     return () => {
@@ -146,11 +167,11 @@ export default function App({
   }, [streamStore, addLog]);
 
   const addSystemLog = useCallback((content: string) => {
-    dispatch({ type: 'ADD_LOG', entry: { type: 'system', content } });
+    dispatch({ type: "ADD_LOG", entry: { type: "system", content } });
   }, []);
 
   const addErrorLog = useCallback((content: string) => {
-    dispatch({ type: 'ADD_LOG', entry: { type: 'error', content } });
+    dispatch({ type: "ADD_LOG", entry: { type: "error", content } });
   }, []);
 
   /**
@@ -159,11 +180,14 @@ export default function App({
    * text content) as compact tool markers — otherwise a compacted session
    * loads as a wall of empty agent bubbles.
    */
-  const replaySessionMessages = createReplaySessionMessages({ addLog, addSystemLog });
+  const replaySessionMessages = createReplaySessionMessages({
+    addLog,
+    addSystemLog,
+  });
 
   // ── Console capture ──
   useConsoleCapture((entry) => {
-    dispatch({ type: 'ADD_LOG', entry });
+    dispatch({ type: "ADD_LOG", entry });
   });
 
   // ── Agent hook ──
@@ -174,17 +198,11 @@ export default function App({
     setState: setStateForAgent,
     addLog,
     getMode: () => stateRef.current.mode,
-    setMode: (mode) => dispatch({ type: 'SET_MODE', mode }),
+    setMode: (mode) => dispatch({ type: "SET_MODE", mode }),
     streamStore,
   });
 
   /** True when the active session's plan has at least one `- [ ]` task. */
-  const hasPendingPlanTasks = useCallback(async (): Promise<boolean> => {
-    const sid = stateRef.current._sessionId ?? sessionId;
-    const content = await readPlanTaskFile(sid);
-    return parseIncompleteTasks(content).length > 0;
-  }, [sessionId]);
-
   // ── Slash command handling ──
   // ── Slash command handling ──
   // ── Slash command handling (app/slashCommands.ts) ──
@@ -204,55 +222,14 @@ export default function App({
     paneRef,
   });
 
-  // ── Input submission handler ──
-  const handleSubmit = useCallback(
-    async (text: string) => {
-      // Slash command?
-      if (text.startsWith('/')) {
-        await handleSlashCommand(text);
-        return;
-      }
-
-      // Explicit plan-execution intent triggers the structured task-by-task
-      // executor (with per-task banners). Users rarely type the bare
-      // "continue" keyword — phrases like "go task by task" previously fell
-      // through to free-form chat, where the agent ran all tasks in one
-      // turn with no visible task progress. Only route when pending tasks
-      // exist — otherwise the message must reach the agent normally.
-      const normalized = text.toLowerCase().trim().replace(/[.!]+$/, '');
-      if (
-        normalized !== 'continue' &&
-        PLAN_EXECUTION_INTENT.test(normalized) &&
-        (await hasPendingPlanTasks())
-      ) {
-        agentApi.executePlan();
-        return;
-      }
-      // Bare "continue" always starts plan execution (the planner prompt
-      // ends with 'Type `continue` to start executing this plan.').
-      if (normalized === 'continue') {
-        agentApi.executePlan();
-        return;
-      }
-
-      // Sending a message is intent to follow the conversation again —
-      // re-arm auto-follow so responses land in view even if the user had
-      // scrolled up to read earlier history.
-      paneRef.current?.focusBottom();
-
-      // Hydrate @file mentions then submit. The hydrated text (with
-      // <file> blocks) goes to the model; the original text (with @path
-      // mentions) is what gets displayed in the log.
-      const display = text.replace(/\[@([^\]]+)\]/g, '@$1');
-      try {
-        const hydrated = await hydrateMessage(text);
-        agentApi.submitMessage(hydrated, display);
-      } catch {
-        agentApi.submitMessage(text, display);
-      }
-    },
-    [handleSlashCommand, agentApi, paneRef],
-  );
+  // ── Input submission handler (hooks/useSubmit.ts) ──
+  const handleSubmit = useSubmit({
+    sessionId,
+    stateRef,
+    paneRef,
+    agentApi,
+    handleSlashCommand,
+  });
 
   // ── Selector overlay: accept / dismiss ──
   const acceptSelector = useCallback(
@@ -260,41 +237,60 @@ export default function App({
       const sel = stateRef.current.pendingSelector;
       if (!sel) return;
       const raw = sel.items[selectedIndex];
-      const chosen = typeof raw === 'string' ? raw : raw?.value ?? raw?.label;
-      dispatch({ type: 'CLOSE_SELECTOR' });
+      const chosen = typeof raw === "string" ? raw : (raw?.value ?? raw?.label);
+      dispatch({ type: "CLOSE_SELECTOR" });
 
       if (!chosen) return;
 
       switch (sel.kind) {
-        case 'model': {
+        case "model": {
           agent.updateConfig({ model: chosen });
           const updated = agent.getConfig();
-          dispatch({ type: 'SET_CONFIG', config: updated });
+          dispatch({ type: "SET_CONFIG", config: updated });
           addSystemLog(`Model updated to: ${chosen}`);
           break;
         }
-        case 'mode': {
-          const newMode = chosen as 'notify' | 'auto-edit' | 'auto';
+        case "thinking": {
+          const cfg = agent.getConfig();
+          const level = chosen as "off" | "low" | "medium" | "high";
+          const updated = { ...cfg, thinkingLevel: level };
+          agent.updateConfig({ thinkingLevel: level });
+          dispatch({ type: "SET_CONFIG", config: updated });
+          import("../config.js")
+            .then(({ saveConfig }) => saveConfig(updated))
+            .catch((e) => {
+              logTrace(`[trace] saveConfig failed: ${e?.name} ${e?.message}`);
+            });
+          try {
+            addSystemLog(`Thinking level set to: ${level}`);
+          } catch (e) {
+            logTrace(`[trace] addSystemLog failed: ${e}`);
+          }
+
+          break;
+        }
+        case "mode": {
+          const newMode = chosen as "notify" | "auto-edit" | "auto";
           const c = agent.getConfig();
           c.permissionMode = newMode;
           agent.updateConfig(c);
           session.metadata.permissionMode = newMode;
           try {
             await sessionManager.saveSession(session);
-          } catch {
-            // ignore
+          } catch (e) {
+            logTrace(`[trace] saveSession failed: ${e}`);
           }
-          dispatch({ type: 'SET_PERMISSION_MODE', mode: newMode });
+          dispatch({ type: "SET_PERMISSION_MODE", mode: newMode });
           addSystemLog(`Permission mode set to: ${newMode}`);
           break;
         }
-        case 'session': {
+        case "session": {
           const newSession = await sessionManager.loadSession(chosen);
           if (newSession) {
             agent.setSessionId(chosen);
             agent.setHistory(newSession.messages);
-            dispatch({ type: 'SET_SESSION_ID', sessionId: chosen });
-            dispatch({ type: 'CLEAR_LOG' });
+            dispatch({ type: "SET_SESSION_ID", sessionId: chosen });
+            dispatch({ type: "CLEAR_LOG" });
             addSystemLog(`Loaded session: ${chosen}`);
             replaySessionMessages(newSession.messages);
           } else {
@@ -302,26 +298,28 @@ export default function App({
           }
           break;
         }
-        case 'mcp': {
+        case "mcp": {
           // Second level: pick an action for the chosen server (mirrors the
           // old REPL's inquirer two-step /mcp flow).
           dispatch({
-            type: 'OPEN_SELECTOR',
+            type: "OPEN_SELECTOR",
             selector: {
-              kind: 'mcp-action',
+              kind: "mcp-action",
               title: `Action for ${chosen}`,
-              items: ['Reconnect', 'Disconnect', 'List tools'],
+              items: ["Reconnect", "Disconnect", "List tools"],
               selectedIndex: 0,
               context: chosen,
             },
           });
           break;
         }
-        case 'mcp-action': {
+        case "mcp-action": {
           const name = sel.context;
           if (!name) break;
-          if (chosen === 'Reconnect') {
-            const srv = (agent.getConfig().mcpServers || []).find((s) => s.name === name);
+          if (chosen === "Reconnect") {
+            const srv = (agent.getConfig().mcpServers || []).find(
+              (s) => s.name === name,
+            );
             if (srv) {
               addSystemLog(`Reconnecting to ${name}...`);
               try {
@@ -331,17 +329,26 @@ export default function App({
                 addErrorLog(`Failed to reconnect to ${name}: ${err.message}`);
               }
             }
-          } else if (chosen === 'Disconnect') {
+          } else if (chosen === "Disconnect") {
             await agent.mcpManager.disconnect(name);
             addSystemLog(`Disconnected ${name}.`);
-          } else if (chosen === 'List tools') {
+          } else if (chosen === "List tools") {
             const tools = agent.mcpManager.getTools(name);
             addSystemLog(`Tools for ${name}:`);
             if (tools.length === 0) {
-              dispatch({ type: 'ADD_LOG', entry: { type: 'info', content: '  No tools found or server disconnected.' } });
+              dispatch({
+                type: "ADD_LOG",
+                entry: {
+                  type: "info",
+                  content: "  No tools found or server disconnected.",
+                },
+              });
             }
             for (const t of tools) {
-              dispatch({ type: 'ADD_LOG', entry: { type: 'info', content: `  ${t.definition.name}` } });
+              dispatch({
+                type: "ADD_LOG",
+                entry: { type: "info", content: `  ${t.definition.name}` },
+              });
             }
           }
           break;
@@ -361,6 +368,7 @@ export default function App({
   useInput(
     (_input, key) => {
       const sel = stateRef.current.pendingSelector;
+      logTrace(`[trace] selector overlay input: ${JSON.stringify(_input)} key=${JSON.stringify(key)} sel=${sel ? JSON.stringify(sel) : 'null'}`);
       if (!sel) return;
 
       if (selectorObjRef.current !== sel) {
@@ -371,13 +379,22 @@ export default function App({
       if (key.upArrow || key.downArrow) {
         const max = sel.items.length - 1;
         const cur = selectorIndexRef.current;
-        const next = key.upArrow ? (cur <= 0 ? max : cur - 1) : cur >= max ? 0 : cur + 1;
+        const next = key.upArrow
+          ? cur <= 0
+            ? max
+            : cur - 1
+          : cur >= max
+            ? 0
+            : cur + 1;
         selectorIndexRef.current = next;
-        dispatch({ type: 'PATCH', patch: { pendingSelector: { ...sel, selectedIndex: next } } });
+        dispatch({
+          type: "PATCH",
+          patch: { pendingSelector: { ...sel, selectedIndex: next } },
+        });
       } else if (key.return) {
         acceptSelector(selectorIndexRef.current);
       } else if (key.escape) {
-        dispatch({ type: 'CLOSE_SELECTOR' });
+        dispatch({ type: "CLOSE_SELECTOR" });
       }
     },
     // Only active while a selector overlay is open (yields to the
@@ -394,6 +411,7 @@ export default function App({
   const CTRL_C_WINDOW_MS = 2000;
 
   useInput((input, key) => {
+    try {
     // Don't intercept when an overlay/modal is handling its own input.
     if (stateRef.current.pendingApproval) return;
     if (stateRef.current.pendingQuestions) return;
@@ -406,26 +424,43 @@ export default function App({
     if (browseModeRef.current) return;
 
     // Ctrl+S (or its remap) opens the session switcher.
-    if (matchesBinding(input, key, bindingFor('sessionSwitcher'))) {
-      void handleSlashCommand('/session');
+    if (matchesBinding(input, key, bindingFor("sessionSwitcher"))) {
+      void handleSlashCommand("/session");
       return;
     }
 
-    if (matchesBinding(input, key, bindingFor('abort')) && stateRef.current.agentState === 'running') {
-      agentApi.abortCurrentRun();
+    if (
+      matchesBinding(input, key, bindingFor("abort")) &&
+      stateRef.current.agentState === "running"
+    ) {
+      try{
+        agentApi.abortCurrentRun();
+      } catch (e) {
+        logTrace(`[trace] abortCurrentRun threw: ${(e as Error)?.name}: ${(e as Error)?.message}\n${(e as Error)?.stack ?? ''}`);
+      }
+      return;
+      
+
     }
 
     // Ctrl+D exits immediately; Ctrl+C needs a second press.
-    if (key.ctrl && input === 'd') {
+    if (key.ctrl && input === "d") {
       agent.destroy().finally(() => exit());
-    } else if (key.ctrl && input === 'c') {
+    } else if (key.ctrl && input === "c") {
       const now = Date.now();
       if (now - lastCtrlCRef.current <= CTRL_C_WINDOW_MS) {
         agent.destroy().finally(() => exit());
       } else {
         lastCtrlCRef.current = now;
-        addSystemLog('Press Ctrl+C again to exit (Ctrl+D exits immediately, Esc aborts the current turn).');
+        addSystemLog(
+          "Press Ctrl+C again to exit (Ctrl+D exits immediately, Esc aborts the current turn).",
+        );
       }
+    }
+    } catch (err: unknown) {
+      const e = err as Error;
+      logTrace(`[trace] app useInput threw: ${e?.name}: ${e?.message}\ninput=${JSON.stringify(input)} key=${JSON.stringify(key)}\n${e?.stack ?? ''}`);
+      throw err;
     }
   });
 
@@ -435,24 +470,25 @@ export default function App({
     if (initialisedRef.current) return;
     initialisedRef.current = true;
     dispatch({
-      type: 'ADD_LOG',
+      type: "ADD_LOG",
       entry: {
-        type: 'system',
+        type: "system",
         content: `🚀 tiny-cli ready — Model: ${config.model} @ ${config.endpoint}`,
       },
     });
     dispatch({
-      type: 'ADD_LOG',
+      type: "ADD_LOG",
       entry: {
-        type: 'system',
-        content: `Session: ${sessionId} | Mode: ${initialMode} | Permission: ${session.metadata.permissionMode || config.permissionMode || 'notify'}`,
+        type: "system",
+        content: `Session: ${sessionId} | Mode: ${initialMode} | Permission: ${session.metadata.permissionMode || config.permissionMode || "notify"}`,
       },
     });
     dispatch({
-      type: 'ADD_LOG',
+      type: "ADD_LOG",
       entry: {
-        type: 'system',
-        content: 'Type a message below, or use / for commands, @ to mention files.',
+        type: "system",
+        content:
+          "Type a message below, or use / for commands, @ to mention files.",
       },
     });
   }, []);
@@ -460,7 +496,11 @@ export default function App({
   // ── Render ──
   const config_ = state._config ?? config;
   const sessionId_ = state._sessionId ?? sessionId;
-  const permissionMode = state._permissionMode ?? session.metadata.permissionMode ?? config.permissionMode ?? 'notify';
+  const permissionMode =
+    state._permissionMode ??
+    session.metadata.permissionMode ??
+    config.permissionMode ??
+    "notify";
 
   const { stdout } = useStdout();
   const terminalRows = stdout?.rows ?? 24;
@@ -499,7 +539,10 @@ export default function App({
   // amount or Yoga clips interior rows of the overflowing column (missing
   // popover rows / garbled list).
   const popoverRows = mentionActive ? MENTION_POPOVER_ROWS : 0;
-  const topBoxHeight = Math.max(8, terminalRows - inputHeight - bottomBoxHeight - popoverRows);
+  const topBoxHeight = Math.max(
+    8,
+    terminalRows - inputHeight - bottomBoxHeight - popoverRows,
+  );
   // Inside the top box: border (2) + reserved status strip (1) = 3 chrome rows.
   const paneMaxHeight = Math.max(4, topBoxHeight - 3);
 
@@ -509,19 +552,22 @@ export default function App({
   // Handler for selector popover selections (model/mode/session/mcp)
   const handleSelectorAccept = (kind: SelectorKind, value: string) => {
     switch (kind) {
-      case 'model':
+      case "model":
         handleSlashCommand(`/model ${value}`);
         break;
-      case 'mode':
+      case "mode":
         handleSlashCommand(`/mode ${value}`);
         break;
-      case 'session':
+      case "session":
         handleSlashCommand(`/session ${value}`);
         break;
-      case 'mcp':
+      case "mcp":
         handleSlashCommand(`/mcp ${value}`);
         break;
-      case 'skill': {
+      case "thinking":
+        handleSlashCommand(`/thinking ${value}`);
+        break;
+      case "skill": {
         // Toggle the selected skill in config.activeSkills. The full body
         // of every active skill is injected into the system prompt on each
         // run (agent.ts), so this survives compaction and reloads.
@@ -532,134 +578,170 @@ export default function App({
           addSystemLog(`Skill deactivated: ${value}`);
         } else {
           active.add(value);
-          addSystemLog(`Skill activated: ${value} (injected into system prompt)`);
+          addSystemLog(
+            `Skill activated: ${value} (injected into system prompt)`,
+          );
         }
         const updated = { ...cfg, activeSkills: [...active] };
         agent.updateConfig(updated);
-        import('../config.js').then(({ saveConfig }) => saveConfig(updated)).catch(() => {});
+        import("../config.js")
+          .then(({ saveConfig }) => saveConfig(updated))
+          .catch(() => {});
         break;
       }
     }
-    dispatch({ type: 'PATCH', patch: { pendingSelector: null } });
+    dispatch({ type: "PATCH", patch: { pendingSelector: null } });
   };
 
   return (
     <StreamProvider store={streamStore}>
-    <Box flexDirection="column" height={terminalRows}>
-      {/* TOP: conversation pane — fixed height, scrollable, collapsible.
+      <Box flexDirection="column" height={terminalRows}>
+        {/* TOP: conversation pane — fixed height, scrollable, collapsible.
           Border stays themed and quiet; only alarms (pending modal,
           error) override it. */}
-      <Box
-        flexDirection="column"
-        height={topBoxHeight}
-        borderStyle="round"
-        borderColor={
-          state.pendingApproval || state.pendingQuestions || state.pendingRecovery ? theme.warning
-          : state.agentState === 'error' ? theme.error
-          : theme.border
-        }
-      >
-        <MessageLog
-          ref={paneRef}
-          entries={state.log}
-          active={paneKeysActive}
-          maxHeight={paneMaxHeight}
-          browseMode={browseMode}
-          onBrowseModeChange={setBrowseMode}
-          agentRunning={state.agentState === 'running' || state.agentState === 'awaiting_approval'}
-          queuedCount={state.messageQueue.length}
-        />
+        <Box
+          flexDirection="column"
+          height={topBoxHeight}
+          borderStyle="round"
+          borderColor={
+            state.pendingApproval ||
+            state.pendingQuestions ||
+            state.pendingRecovery
+              ? theme.warning
+              : state.agentState === "error"
+                ? theme.error
+                : theme.border
+          }
+        >
+          <MessageLog
+            ref={paneRef}
+            entries={state.log}
+            active={paneKeysActive}
+            maxHeight={paneMaxHeight}
+            browseMode={browseMode}
+            onBrowseModeChange={setBrowseMode}
+            agentRunning={
+              state.agentState === "running" ||
+              state.agentState === "awaiting_approval"
+            }
+            queuedCount={state.messageQueue.length}
+          />
+        </Box>
 
-      </Box>
-
-      {/* MIDDLE: input box — always mounted; unmounting would tear down
+        {/* MIDDLE: input box — always mounted; unmounting would tear down
           useInput's raw-mode cleanup and kill all keyboard input. In browse
           mode we show the banner and blur the input so the conversation pane
           owns arrows/Tab without key conflicts; also blurred while a modal
           overlay owns the keyboard (its quick-select keys y/s/n/a must not
           land in the text draft). */}
-      {browseMode ? (
-        <Box height={inputHeight}>
-          <Text dimColor> BROWSE MODE — Esc or Enter to resume typing</Text>
+        {browseMode ? (
+          <Box height={inputHeight}>
+            <Text dimColor> BROWSE MODE — Esc or Enter to resume typing</Text>
+          </Box>
+        ) : null}
+        <Box display={browseMode ? "none" : "flex"}>
+          <InputBox
+            mode={state.mode}
+            agentState={state.agentState}
+            onSubmit={handleSubmit}
+            showAutocomplete={state.showAutocomplete}
+            fileIndex={fileIndex}
+            onMentionActiveChange={setMentionActive}
+            onSearchActiveChange={setSearchActive}
+            onDraftLinesChange={setDraftLines}
+            focus={
+              !browseMode &&
+              !state.pendingApproval &&
+              !state.pendingQuestions &&
+              !state.pendingRecovery &&
+              !state.pendingPlanConfirm &&
+              !state.pendingSelector
+            }
+            dispatch={dispatch}
+          />
         </Box>
-      ) : null}
-      <Box display={browseMode ? 'none' : 'flex'}>
-        <InputBox
-          mode={state.mode}
-          agentState={state.agentState}
-          onSubmit={handleSubmit}
-          showAutocomplete={state.showAutocomplete}
-          fileIndex={fileIndex}
-          onMentionActiveChange={setMentionActive}
-          onSearchActiveChange={setSearchActive}
-          onDraftLinesChange={setDraftLines}
-          focus={!browseMode && !state.pendingApproval && !state.pendingQuestions && !state.pendingRecovery && !state.pendingPlanConfirm && !state.pendingSelector}
-          dispatch={dispatch}
-        />
-      </Box>
 
-      {/* BOTTOM: agent details (banner + Model/Session + status) — fixed height.
+        {/* BOTTOM: agent details (banner + Model/Session + status) — fixed height.
           Border colour comes straight from the theme (borderStatus), so each
           sample theme gives this panel a distinct look. */}
-      <Box
-        flexDirection="column"
-        height={bottomBoxHeight}
-        borderStyle="single"
-        borderColor={theme.borderStatus}
-      >
-        <Header model={config_.model} endpoint={config_.endpoint} sessionId={sessionId_} />
-        <StatusBar
-          mode={state.mode}
-          contextStats={state.contextStats}
-          permissionMode={permissionMode}
-          compactThreshold={config_.compactionThresholdTokens}
-          cwd={process.cwd()}
-        />
-      </Box>
+        <Box
+          flexDirection="column"
+          height={bottomBoxHeight}
+          borderStyle="single"
+          borderColor={theme.borderStatus}
+        >
+          <Header
+            model={config_.model}
+            endpoint={config_.endpoint}
+            sessionId={sessionId_}
+          />
+          <StatusBar
+            mode={state.mode}
+            contextStats={state.contextStats}
+            permissionMode={permissionMode}
+            compactThreshold={config_.compactionThresholdTokens}
+            thinkingLevel={config_.thinkingLevel}
+            cwd={process.cwd()}
+          />
+        </Box>
 
-      {/* Approval modal overlay */}
-      {state.pendingApproval ? (
-        <ApprovalModal toolCall={state.pendingApproval} onSelect={agentApi.resolveApproval} />
-      ) : null}
+        {/* Approval modal overlay */}
+        {state.pendingApproval ? (
+          <ApprovalModal
+            toolCall={state.pendingApproval}
+            onSelect={agentApi.resolveApproval}
+          />
+        ) : null}
 
-      {/* Questionnaire modal overlay (agent asked the user) */}
-      {state.pendingQuestions ? (
-        <QuestionnaireModal
-          questionnaire={state.pendingQuestions}
-          onDone={agentApi.resolveQuestionnaire}
-        />
-      ) : null}
+        {/* Questionnaire modal overlay (agent asked the user) */}
+        {state.pendingQuestions ? (
+          <QuestionnaireModal
+            questionnaire={state.pendingQuestions}
+            onDone={agentApi.resolveQuestionnaire}
+          />
+        ) : null}
 
-      {/* Recovery modal overlay (task not marked complete) */}
-      {state.pendingRecovery ? (
-        <RecoveryModal recovery={state.pendingRecovery} onSelect={agentApi.resolveRecovery} />
-      ) : null}
+        {/* Recovery modal overlay (task not marked complete) */}
+        {state.pendingRecovery ? (
+          <RecoveryModal
+            recovery={state.pendingRecovery}
+            onSelect={agentApi.resolveRecovery}
+          />
+        ) : null}
 
-      {/* Plan-execute confirm overlay (plan turn finished) */}
-      {state.pendingPlanConfirm ? (
-        <PlanConfirmModal
-          taskCount={state.pendingPlanConfirm.taskCount}
-          onSelect={agentApi.resolvePlanConfirm}
-        />
-      ) : null}
+        {/* Plan-execute confirm overlay (plan turn finished) */}
+        {state.pendingPlanConfirm ? (
+          <PlanConfirmModal
+            taskCount={state.pendingPlanConfirm.taskCount}
+            onSelect={agentApi.resolvePlanConfirm}
+          />
+        ) : null}
 
-      {/* Inline selector overlay (model / mode / session picker) —
+        {/* Inline selector overlay (model / mode / session picker) —
           absolutely positioned so it floats above the input row without
           reserving rows in the flex layout. Bottom-anchored: it grows
           upward from just above the input (bottom box 5 + input 1 + gap 1). */}
-      {state.pendingSelector ? (
-        <Box position="absolute" bottom={bottomBoxHeight + inputHeight + 1} left={2} width={terminalColumns - 4}>
-          <AutocompletePopover
-            items={state.pendingSelector.items}
-            title={state.pendingSelector.title}
-            selectedIndex={state.pendingSelector.selectedIndex}
-            onSelect={(value) => handleSelectorAccept(state.pendingSelector!.kind, value)}
-            onDismiss={() => dispatch({ type: 'PATCH', patch: { pendingSelector: null } })}
-          />
-        </Box>
-      ) : null}
-
-    </Box>
+        {state.pendingSelector ? (
+          <Box
+            position="absolute"
+            bottom={bottomBoxHeight + inputHeight + 1}
+            left={2}
+            width={terminalColumns - 4}
+          >
+            <AutocompletePopover
+              items={state.pendingSelector.items}
+              title={state.pendingSelector.title}
+              selectedIndex={state.pendingSelector.selectedIndex}
+              onSelect={(value) =>
+                handleSelectorAccept(state.pendingSelector!.kind, value)
+              }
+              onDismiss={() =>
+                dispatch({ type: "PATCH", patch: { pendingSelector: null } })
+              }
+            />
+          </Box>
+        ) : null}
+      </Box>
     </StreamProvider>
   );
 }

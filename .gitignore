@@ -19,3 +19,6 @@ scratch
 testfolder
 workspace
 dist-bin/
+old
+.playwright-mcp
+opentui-docs-md

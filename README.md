@@ -228,7 +228,10 @@ Installs a self-contained binary to `~/.tiny-cli` (Windows: `%USERPROFILE%\.tiny
 npm install -g tiny-cli
 ```
 
-Requires Node.js ≥ 20.
+Requires Node.js ≥ 26.4 (`--experimental-ffi`) or Bun ≥ 1.3 — the TUI renders
+through OpenTUI, whose native library needs one of those runtimes. Bun is the
+better-supported lane; on musl/Alpine also run `apk add libstdc++ libgcc` (and
+set `OPENTUI_LIBC=musl` if autodetection fails).
 
 ### From source
 

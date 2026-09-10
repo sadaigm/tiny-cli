@@ -140,18 +140,30 @@ export function createRunTurn(deps: {
       // a normal entry.
       let streamedAnything = false;
       const onText = (delta: string): void => {
+        try {
         // First text delta — the thinking phase is over: commit it as a
         // collapsed reasoning entry so it stays above the response.
         streamStore.commitThinking();
         streamedAnything = true;
         streamStore.appendResponse(delta);
+        } catch (err: unknown) {
+          const e = err as Error;
+          logDebug(`[trace] onText threw: ${e?.name}: ${e?.message}\n${e?.stack ?? ''}`);
+          throw err;
+        }
       };
 
       // onReasoning — stream the model's thinking into the live thinking
       // panel, separate from the assistant text. Concatenation happens in
       // the store; only that panel re-renders per delta.
       const onReasoning = (delta: string): void => {
+        try {
         streamStore.appendThinking(delta);
+        } catch (err: unknown) {
+          const e = err as Error;
+          logDebug(`[trace] onReasoning threw: ${e?.name}: ${e?.message}\n${e?.stack ?? ''}`);
+          throw err;
+        }
       };
 
       logDebug('[trace] runAgentTurn: calling agent.run()');
@@ -167,6 +179,10 @@ export function createRunTurn(deps: {
         showQuestionnaire,
       );
       logDebug(`[trace] runAgentTurn: agent.run() resolved (content=${response.content?.length ?? 0} chars)`);
+
+      // Trace each post-run step so an abort-time crash is bracketed.
+      const traceStep = (label: string): void =>
+        logDebug(`[trace] runAgentTurn step: ${label} (aborted=${abortController.signal.aborted})`);
 
       // Log the final assistant response (if non-empty). When the whole
       // text already streamed into the live entry, re-adding the blob
@@ -184,12 +200,17 @@ export function createRunTurn(deps: {
       }
 
       // Persist session history
+      traceStep('saveSession:enter');
       await saveSession();
+      traceStep('saveSession:done');
 
       // Commit the streamed response as a normal assistant entry (the
       // fallback blob above was skipped when the stream produced it).
+      traceStep('finishStreaming:enter');
       finishStreaming();
+      traceStep('finishStreaming:done');
       streamStore.setSpinner(false, '');
+      traceStep('spinner-off:done');
 
       // ── Queue drain ──────────────────────────────────────────
       const nextMessage = refs.queueRef.current.dequeue();

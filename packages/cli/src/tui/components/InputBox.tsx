@@ -7,15 +7,17 @@ import { searchFiles } from '../../file-mention.js';
 import { SLASH_COMMANDS, type SlashCommand } from '../utils/commands.js';
 import { usePickers } from './input/usePickers.js';
 import { useHistorySearch } from './input/useHistorySearch.js';
+import { useInputSubmit } from './input/useInputSubmit.js';
 import {
   pasteChipText,
   countLines,
-  expandPasteChips,
   normalizeLineEndings,
 } from '../utils/pasteChip.js';
 import { InputHistory, searchHistory } from '../utils/inputHistory.js';
-import { loadHistory, saveHistory } from '../utils/historyStore.js';
+import { loadHistory } from '../utils/historyStore.js';
 import { getTheme } from '../theme.js';
+import { logDebug } from '@tiny-cli/core/src/logger.js';
+import { log } from 'console';
 
 /**
  * Props for the {@link InputBox} component.
@@ -296,46 +298,21 @@ function InputBox({
     onSearchActiveChange?.(searchActive);
   }, [searchActive, onSearchActiveChange]);
 
-  // --- Submit logic --------------------------------------------------------
+  // --- Submit logic (input/useInputSubmit.ts) -------------------------------
 
-  const handleSubmit = useCallback(
-    (submittedValue: string) => {
-      // Expand any paste chips back to their raw text before submitting, then
-      // trim. hydrateMessage (in the app layer) further expands @file tokens.
-      const expanded = expandPasteChips(submittedValue, pastesRef.current);
-      const trimmed = expanded.trim();
-      if (trimmed.length === 0) return;
-
-      // While a picker is open, Enter belongs to it (accept the highlighted
-      // item), not to submit — otherwise the draft would be sent as-is.
-      if ((mentionActive && mentionItems.length > 0) || (slashActive && slashItems.length > 0)) {
-        return;
-      }
-
-      if (showAutocomplete && onAutocompleteAccept) {
-        onAutocompleteAccept(trimmed);
-        return;
-      }
-
-      // Remember the submitted line for ↑/↓ recall before clearing the input.
-      historyRef.current.push(trimmed);
-      void saveHistory(historyRef.current);
-      onSubmit(trimmed);
-      // Clear the input and reset the paste store + per-input chip counter.
-      setValue('');
-      pastesRef.current.clear();
-      pasteIdRef.current = 0;
-    },
-    [
-      onSubmit,
-      showAutocomplete,
-      onAutocompleteAccept,
-      mentionActive,
-      mentionItems.length,
-      slashActive,
-      slashItems.length,
-    ],
-  );
+  const handleSubmit = useInputSubmit({
+    onSubmit,
+    pastesRef,
+    pasteIdRef,
+    historyRef,
+    setValue,
+    showAutocomplete,
+    onAutocompleteAccept,
+    mentionActive,
+    mentionItemsLength: mentionItems.length,
+    slashActive,
+    slashItemsLength: slashItems.length,
+  });
 
   // --- Picker keyboard navigation (slash commands + @file mentions) --------
 
@@ -378,16 +355,19 @@ function InputBox({
     focus && !searchActive && !slashActive && !mentionActive && !showAutocomplete && value.length > 0;
   useInput(
     (_input, key) => {
+      logDebug(`InputBox: Esc handler: input=${JSON.stringify(_input)}, key=${JSON.stringify(key)}`);
       if (!key.escape) return;
       key.preventDefault();
       const now = Date.now();
       if (now - escArmedRef.current <= ESC_CLEAR_MS) {
+        logDebug('InputBox: Esc-Esc detected — clearing draft');
         setValue('');
         pastesRef.current.clear();
         pasteIdRef.current = 0;
         escArmedRef.current = 0;
         setEscHint(false);
       } else {
+        logDebug('InputBox: Esc armed — waiting for second press to clear draft');
         escArmedRef.current = now;
         setEscHint(true);
       }

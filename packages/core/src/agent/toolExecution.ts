@@ -17,7 +17,7 @@ import {
   BASH_LOCK,
   MCP_LOCK,
 } from "../concurrency.js";
-import { logDebug } from "../logger.js";
+import { logDebug, logInfo } from "../logger.js";
 
 export const DENIED_MSG = "Error: User denied permission to execute this tool.";
 export const REDUNDANCY_MSG = (call: ToolCall) =>
@@ -165,7 +165,7 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
   // ----------------------------------------------------------------
   const gate = new MutationGate();
   const pathMutex = new MutexMap();
-  const execContext = { sessionId: config.sessionId, cwd: process.cwd(), askUser: onAskUser };
+  const execContext = { sessionId: config.sessionId, cwd: process.cwd(), askUser: onAskUser, securedMode: config.securedMode !== false };
 
   // Execution windows [start, end] per entry index, used to report
   // observed concurrency for this batch.
@@ -180,7 +180,7 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
   ): Promise<ExecResult> => {
     const label = toolLabel(entry.call);
     const t0 = performance.now();
-    logDebug(`▶ start ${label}`);
+    logInfo(`▶ start ${label}`);
     let result: string;
     try {
       let parsedArgs: any = {};
@@ -196,11 +196,11 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
       }
     } catch (error: any) {
       result = `Tool Error: ${error.message}`;
-      logDebug(`Tool execution failed: ${error.message}`);
+      logInfo(`Tool execution failed: ${error.message}`);
     }
     const toolCallMs = performance.now() - t0;
     execWindows.push({ index: entry.index, start: t0, end: t0 + toolCallMs, name: entry.call.function.name });
-    logDebug(`✔ done ${label} [${Math.round(toolCallMs)}ms]`);
+    logInfo(`✔ done ${label} [${Math.round(toolCallMs)}ms]`);
     return {
       result,
       toolCallMs,
@@ -273,7 +273,7 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
         toolCallMs: 0,
         aborted: !!signal?.aborted,
       };
-      logDebug(`Tool execution failed: ${msg}`);
+      logInfo(`Tool execution failed: ${msg}`);
     }
   });
 

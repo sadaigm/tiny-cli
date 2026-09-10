@@ -23,6 +23,8 @@ export interface StatusBarProps {
   compactThreshold?: number;
   /** Working directory — only the folder name is shown. */
   cwd: string;
+  /** Current reasoning effort level; unset means off (no thinking param sent). */
+  thinkingLevel?: 'off' | 'low' | 'medium' | 'high';
 }
 
 /**
@@ -84,7 +86,7 @@ function usageMeter(tokens: number, threshold: number): { bar: string; percent: 
  * <StatusBar mode={state.mode} contextStats={state.contextStats} permissionMode="notify" />
  * ```
  */
-function StatusBar({ mode, contextStats, permissionMode, compactThreshold = DEFAULT_COMPACT_THRESHOLD, cwd }: StatusBarProps): React.ReactElement {
+function StatusBar({ mode, contextStats, permissionMode, compactThreshold = DEFAULT_COMPACT_THRESHOLD, cwd, thinkingLevel = 'off' }: StatusBarProps): React.ReactElement {
   // Token counts come from the model tokenizer's encoding (cl100k_base via
   // agent.getContextStats), not a chars/4 estimate — the meter is the real
   // budget the auto-compaction threshold acts on.
@@ -108,6 +110,8 @@ function StatusBar({ mode, contextStats, permissionMode, compactThreshold = DEFA
       <Text color={theme.system}> ({formatBytes(contextStats.characters)})</Text>
       <Text>  </Text>
       <Text color={theme.system}>🔒 {PERMISSION_LABELS[permissionMode]}</Text>
+      <Text>  </Text>
+      <Text color={thinkingLevel === 'off' ? theme.system : theme.accent}>✦ thinking: {thinkingLevel}</Text>
     </Box>
   );
 }

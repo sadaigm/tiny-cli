@@ -32,6 +32,21 @@ export interface StartTuiOptions {
 export async function startTui(opts: StartTuiOptions): Promise<void> {
   // Uncaught failures inside the TUI tree would otherwise vanish with the
   // terminal restore — dump them to the log file before dying.
+  // OpenTUI's keyhandler catches listener errors and reports them via
+  // console.error — which the renderer then paints as an on-screen error
+  // panel. Capture those to the log file too (message + real stack), since
+  // the panel's own stack attribution is unreliable.
+  const origConsoleError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    const err = args.find((a): a is Error => a instanceof Error);
+    if (err) {
+      logError(`console.error: ${err.name}: ${err.message}\n${err.stack ?? '(no stack)'}`);
+    } else {
+      logError(`console.error: ${args.map((a) => String(a)).join(' ')}`);
+    }
+    origConsoleError(...args);
+  };
+
   process.on('uncaughtException', (err) => {
     logError(`uncaughtException: ${err.message}\n${err.stack ?? ''}`);
     process.exit(1);

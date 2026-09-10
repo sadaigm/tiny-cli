@@ -39,12 +39,22 @@ function shouldLog(level: LogLevel): boolean {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[_logLevel];
 }
 
+// Pristine console methods, saved at module load — before the TUI's
+// useConsoleCapture overrides console.* (which would otherwise route the
+// logger's own ERROR output back into logError → infinite recursion).
+const origConsoleError = console.error;
+const origConsoleLog = console.log;
+
 function emit(level: LogLevel, msg: string) {
   const line = `[${level}] ${new Date().toISOString()} ${msg}`;
-  appendToFile(line);
+  // VERBOSE (TRACE/DEBUG) lines land in the file only when the level
+  // allows; LOG/ERROR always — failures must never be filtered away.
+  if (shouldLog(level) || LEVEL_ORDER[level] >= LEVEL_ORDER['LOG']) {
+    appendToFile(line);
+  }
   if (shouldLog(level)) {
-    if (level === 'ERROR') console.error(line);
-    else console.log(line);
+    if (level === 'ERROR') origConsoleError(line);
+    else origConsoleLog(line);
   }
 }
 
@@ -54,6 +64,11 @@ export function logTrace(msg: string) {
 
 export function logDebug(msg: string) {
   emit('DEBUG', msg);
+}
+
+/** Normal-operation info (default level) — e.g. LLM connection lifecycle. */
+export function logInfo(msg: string) {
+  emit('LOG', msg);
 }
 
 export function logError(msg: string) {

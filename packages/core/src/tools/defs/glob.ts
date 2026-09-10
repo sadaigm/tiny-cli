@@ -5,6 +5,7 @@ import path from 'path';
 import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
+import { guardPath } from '../bashGuard.js';
 
 /**
  * fs.promises.glob (Node >=22) is present at runtime but absent from
@@ -44,8 +45,13 @@ export function register(registry: ToolRegistry) {
       required: ['pattern']
     }
   };
-  registry.register(globDef, async (args) => {
+  registry.register(globDef, async (args, context) => {
     if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
+    if (context?.securedMode !== false) {
+      // glob patterns carry a path prefix (`../x/**`, `/etc/*`); guard it
+      const guard = guardPath(args.pattern, process.cwd());
+      if (guard) return guard;
+    }
     try {
       // Native globbing (Node >=22 fs.glob): no shell, so the pattern can never
       // inject commands, and `**` recurses properly. The old `ls -1 ${pattern}`

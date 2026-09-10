@@ -56,6 +56,11 @@ export interface AgentConfig {
   sessionId?: string;
   mcpServers?: McpServerConfig[];
   permissionMode?: PermissionMode;
+  /** Enforce workspace boundary on bash/file tools: file operations stay
+   * inside the project folder (+ project /tmp scratch); toolchain paths are
+   * executable but not readable; credentials are never readable; git
+   * identity config requires user consent. Defaults to true. */
+  securedMode?: boolean;
   logLevel?: LogLevel;
   requestTimeoutMs?: number;
   maxIterations?: number;
@@ -65,6 +70,8 @@ export interface AgentConfig {
   compactionThresholdTokens?: number;
   /** Number of recent tokens kept raw (not summarized) during memory compaction. Defaults to 8000. */
   compactionRetainTokens?: number;
+  /** Reasoning effort for thinking models; wire format depends on backend. Unset/'off' sends no thinking parameter. */
+  thinkingLevel?: 'off' | 'low' | 'medium' | 'high';
   /** Options for agent-skill discovery; when set, available skills are injected into the system prompt. */
   skillsOptions?: LoadSkillsOptions;
   /** Whether /skill:<name> commands are enabled in the TUI. Defaults to true. */

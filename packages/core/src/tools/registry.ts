@@ -4,6 +4,8 @@ import type { AskUserPayload, AskUserResponse } from '../types.js';
 export type ToolContext = {
   sessionId?: string;
   cwd?: string;
+  /** Workspace boundary enforcement (config securedMode; undefined = on). */
+  securedMode?: boolean;
   /** Interactive question channel (wired by Agent.run when the host provides onAskUser). */
   askUser?: (payload: AskUserPayload) => Promise<AskUserResponse>;
 };

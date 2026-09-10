@@ -22,6 +22,7 @@
 import React, { createContext, useContext, useRef } from 'react';
 import { useKeyboard, useTerminalDimensions, usePaste as useOpentuiPaste } from '@opentui/react';
 import { decodePasteBytes, type KeyEvent } from '@opentui/core';
+import { logError } from '@tiny-cli/core';
 
 // ---------------------------------------------------------------------------
 // Colours
@@ -98,7 +99,9 @@ export function toInkKey(ev: KeyEvent): { input: string; key: InkKey } {
     home: n === 'home',
     end: n === 'end',
     space: n === 'space',
-    preventDefault: () => ev.preventDefault(),
+    // OpenTUI KeyEvents don't reliably expose preventDefault — calling it
+    // throws on some event shapes, so guard it: ink keys are always callable.
+    preventDefault: () => ev.preventDefault?.(),
   };
   // ink's `input`: the printable character for plain keys, the base letter for
   // ctrl/meta combos (ink delivers e.g. 'p' for ctrl+p — components match on
@@ -129,7 +132,13 @@ export function useInput(
     if (ev.eventType !== 'press' && ev.eventType !== 'repeat') return;
     if (!active) return; // ink semantics: inactive handlers simply don't fire
     const { input, key } = toInkKey(ev);
-    ref.current(input, key);
+    try {
+      ref.current(input, key);
+    } catch (err) {
+      // A throwing key handler must not escape into OpenTUI's stdin dispatch
+      // (it kills every subsequent keypress). Log and keep the loop alive.
+      logError(`useInput handler threw for input=${JSON.stringify(input)}: ${(err as Error)?.stack ?? String(err)}`);
+    }
   });
 }
 

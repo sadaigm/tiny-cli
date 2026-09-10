@@ -166,22 +166,30 @@ function renderToolSummary(
  * `underline` style; plain segments keep the body colour.
  */
 export function renderBodyWithLinks(body: string, bodyColor: string | undefined): React.ReactElement {
-  const segments = splitLinks(body);
-  if (!segments.some((s) => s.link)) {
-    return <Text color={bodyColor}>{body}</Text>;
-  }
+  // One <Text> per line: a single multi-line <text> node can draw over its
+  // siblings; per-line nodes (MarkdownBody's shape) lay out reliably.
   return (
-    <Text color={bodyColor}>
-      {segments.map((seg, i) =>
-        seg.link ? (
-          <Text key={i} underline>
-            {seg.text}
+    <>
+      {body.split('\n').map((line, i) => {
+        const segments = splitLinks(line);
+        if (!segments.some((s) => s.link)) {
+          return <Text key={i} color={bodyColor}>{line}</Text>;
+        }
+        return (
+          <Text key={i} color={bodyColor}>
+            {segments.map((seg, j) =>
+              seg.link ? (
+                <Text key={j} underline>
+                  {seg.text}
+                </Text>
+              ) : (
+                <Text key={j}>{seg.text}</Text>
+              ),
+            )}
           </Text>
-        ) : (
-          <Text key={i}>{seg.text}</Text>
-        ),
-      )}
-    </Text>
+        );
+      })}
+    </>
   );
 }
 
@@ -270,7 +278,7 @@ export default function MessageItem({
           </Text>
           {hiddenHint ? <Text dimColor>{hiddenHint}</Text> : null}
         </Box>
-        <Box marginLeft={3}>
+        <Box marginLeft={3} flexDirection="column">
           {renderBodyWithLinks(body, 'gray')}
         </Box>
       </Box>
@@ -355,7 +363,10 @@ export default function MessageItem({
         </Text>
         {hiddenHint ? <Text dimColor>{hiddenHint}</Text> : null}
       </Box>
-      <Box marginLeft={3}>
+      {/* Column + one <Text> per wrapped line (same shape as MarkdownBody):
+          a single multi-line <text> in a row box draws its lines over the
+          following siblings on some widths (garbled interleaved rows). */}
+      <Box marginLeft={3} flexDirection="column">
         {renderBodyWithLinks(body, bodyColor)}
       </Box>
     </Box>

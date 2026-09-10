@@ -8,6 +8,7 @@
 // a one-shot callback (addLog), so committed entries stay immutable.
 // ─────────────────────────────────────────────────────────────────
 
+import { logDebug } from '@tiny-cli/core';
 
 /** Live content of one streaming phase (thinking or response). */
 export interface StreamSection {
@@ -60,12 +61,12 @@ export class StreamStore {
   // ── writers (called from useAgent callbacks) ──
   appendThinking = (delta: string): void => {
     this.thinking = { text: this.thinking.text + delta, active: true };
-    this.thinkingSubs.forEach((cb) => cb());
+    this.notify('thinking', this.thinkingSubs);
   };
 
   appendResponse = (delta: string): void => {
     this.response = { text: this.response.text + delta, active: true };
-    this.responseSubs.forEach((cb) => cb());
+    this.notify('response', this.responseSubs);
   };
 
   setSpinner = (active: boolean, text: string): void => {
@@ -100,7 +101,24 @@ export class StreamStore {
   clear = (): void => {
     this.thinking = emptySection();
     this.response = emptySection();
-    this.thinkingSubs.forEach((cb) => cb());
-    this.responseSubs.forEach((cb) => cb());
+    this.notify('clear:thinking', this.thinkingSubs);
+    this.notify('clear:response', this.responseSubs);
   };
+
+  /**
+   * Trace wrapper around subscriber notification: if a subscriber
+   * (useSyncExternalStore callback → React render) throws, the error lands
+   * in the trace log with the section name instead of escaping raw.
+   */
+  private notify(section: string, subs: Set<() => void>): void {
+    subs.forEach((cb) => {
+      try {
+        cb();
+      } catch (err: unknown) {
+        const e = err as Error;
+        logDebug(`[trace] StreamStore ${section} subscriber threw: ${e?.name}: ${e?.message}\n${e?.stack ?? ''}`);
+        throw err;
+      }
+    });
+  }
 }

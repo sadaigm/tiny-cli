@@ -1,7 +1,8 @@
 import fetch from 'node-fetch';
 import https from 'https';
 import { AgentConfig, Message, ToolDefinition } from '../types.js';
-import { logTrace, logDebug } from '../logger.js';
+import { logTrace, logDebug, logInfo } from '../logger.js';
+import { applyThinking } from './thinking.js';
 
 export interface ModelResponse {
   content: string;
@@ -57,6 +58,7 @@ export class ModelClient {
       messages,
       temperature: this.config.temperature ?? 0.2,
     };
+    applyThinking(payload, this.config);
 
     if (tools && tools.length > 0) {
       payload.tools = tools.map(t => ({
@@ -66,7 +68,7 @@ export class ModelClient {
     }
 
     const cMessages = payload.messages.filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system');
-    logTrace(`chat() — sending request to ${this.config.endpoint}/chat/completions, model=${this.config.model}, messages=${cMessages.length}, tools=${payload.tools?.length ?? 0}`);
+    logTrace(`chat() — sending request to ${this.config.endpoint}/chat/completions, model=${this.config.model}, thinking=${this.config.thinkingLevel ?? 'off'}, messages=${cMessages.length}, tools=${payload.tools?.length ?? 0}`);
 
     const fetchStart = Date.now();
     let response;
@@ -122,6 +124,7 @@ export class ModelClient {
       temperature: this.config.temperature ?? 0.2,
       stream: true,
     };
+    applyThinking(payload, this.config);
     if (tools && tools.length > 0) {
       payload.tools = tools.map((t) => ({
         type: 'function',
@@ -130,7 +133,7 @@ export class ModelClient {
     }
 
     const callStart = Date.now();
-    logTrace(`chatStreamed() — POST ${this.config.endpoint}/chat/completions, model=${this.config.model}, messages=${messages.length}, tools=${payload.tools?.length ?? 0}, timeoutMs=${this.timeoutMs}`);
+    logInfo(`chatStreamed() — POST ${this.config.endpoint}/chat/completions, model=${this.config.model}, thinking=${this.config.thinkingLevel ?? 'off'}, messages=${messages.length}, tools=${payload.tools?.length ?? 0}, timeoutMs=${this.timeoutMs}`);
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -141,7 +144,7 @@ export class ModelClient {
       agent: this.agent,
       signal: this.combinedSignal(signal),
     }).catch((err: any) => {
-      logTrace(`chatStreamed() — fetch FAILED after ${Date.now() - callStart}ms: ${err.name}: ${err.message}`);
+      logInfo(`chatStreamed() — fetch FAILED after ${Date.now() - callStart}ms: ${err.name}: ${err.message}`);
       throw err;
     });
 
@@ -150,7 +153,7 @@ export class ModelClient {
       logTrace(`chatStreamed() — failed request payload: ${JSON.stringify(payload)}`);
       throw new Error(`Model stream error: ${response.statusText}`);
     }
-    logTrace(`chatStreamed() — stream open after ${Date.now() - callStart}ms, consuming deltas…`);
+    logInfo(`chatStreamed() — stream open after ${Date.now() - callStart}ms, consuming deltas…`);
 
     // node-fetch's abort path emits 'error' on the body stream. If no
     // listener is attached at that instant (e.g. abort fires between awaited
@@ -160,6 +163,28 @@ export class ModelClient {
     (response.body as any)?.on?.('error', (err: any) => {
       logTrace(`chatStreamed() — body stream error: ${err?.name}: ${err?.message} (userSignalAborted=${signal?.aborted})`);
     });
+
+    // Bun/undici quirk: iterating an aborted fetch's body can hang instead
+    // of rejecting, leaving the turn stuck ("Thinking…" forever). On abort,
+    // forcibly tear the body down so the for-await below rejects and the
+    // catch returns the partial response.
+    signal?.addEventListener(
+      'abort',
+      () => {
+        const body = response.body as any;
+        try {
+          body?.destroy?.();
+        } catch {
+          // already destroyed
+        }
+        try {
+          body?.cancel?.();
+        } catch {
+          // already cancelled
+        }
+      },
+      { once: true },
+    );
 
     // Tool-call fragments keyed by their stream index: name + argument
     // chunks concatenated until the stream ends.
@@ -226,7 +251,7 @@ export class ModelClient {
       throw err;
     }
 
-    logTrace(`chatStreamed() — done in ${Date.now() - callStart}ms, content=${content.length} chars, tool_calls=${toolCalls.length}`);
+    logInfo(`chatStreamed() — done in ${Date.now() - callStart}ms, content=${content.length} chars, tool_calls=${toolCalls.length}`);
 
     return {
       content,
@@ -241,6 +266,13 @@ export class ModelClient {
   }
 
   async *stream(messages: Message[], signal?: AbortSignal): AsyncGenerator<string> {
+    const payload: any = {
+      model: this.config.model,
+      messages,
+      temperature: this.config.temperature ?? 0.2,
+      stream: true
+    };
+    applyThinking(payload, this.config);
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -249,12 +281,7 @@ export class ModelClient {
       },
       agent: this.agent,
       signal: this.combinedSignal(signal),
-      body: JSON.stringify({
-        model: this.config.model,
-        messages,
-        temperature: this.config.temperature ?? 0.2,
-        stream: true
-      })
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {

@@ -16,6 +16,7 @@ import { getRedirectCounts } from "./tools/bashRedirect.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./prompts/default.js";
 import { AGENT_SYSTEM_PROMPT } from "./prompts/agent.js";
 import { PLANNING_SYSTEM_PROMPT } from "./prompts/planning.js";
+import { SECURITY_PROMPT_SECTION } from "./prompts/security.js";
 import fs from "fs/promises";
 import path from "path";
 import { McpManager } from "./mcp/manager.js";
@@ -41,7 +42,7 @@ function extractKeywords(text: string): string[] {
   return [...new Set(words)];
 }
 import { loadSkills, renderSkillsXml } from "@tiny-cli/resources";
-import { logDebug } from "./logger.js";
+import { logDebug, logInfo } from "./logger.js";
 import {
   TOOL_CALLS_PER_COMPACT_CHECK,
   measureContext,
@@ -150,6 +151,12 @@ export class Agent {
     systemPrompt = systemPrompt
       .replace("${process.cwd()}", process.cwd())
       .replace("${process.platform()}", process.platform);
+
+    // Secured mode: advisory security rules (the tools enforce the boundary
+    // themselves; this just tells the model the rules up front).
+    if (this.config.securedMode !== false) {
+      systemPrompt += `\n${SECURITY_PROMPT_SECTION}`;
+    }
 
     // Inject available agent skills into the system prompt (re-derived each run)
     const skillsResult = await loadSkills(
@@ -341,7 +348,7 @@ GUIDANCE FOR PLAN EXECUTION:
         // persistently broken request can't loop forever.
         consecutiveModelErrors++;
         this.onModelError?.(error);
-        logDebug(`Model request failed (attempt ${consecutiveModelErrors}): ${error.message}`);
+        logInfo(`Model request failed (attempt ${consecutiveModelErrors}): ${error.message}`);
         if (consecutiveModelErrors >= 3) throw error;
         continue;
       }
