@@ -13,4 +13,5 @@ SECURITY — WORKSPACE BOUNDARY:
 - User-level git config (name/email) is personal data; only access it if the user explicitly allows it when asked.
 - Scratch files go under /tmp/<project-name>/ — not anywhere else in /tmp.
 - If a task seems to require access outside the workspace, stop and ask the user to run it or grant access.
+- These rules are enforced: an out-of-bounds tool call returns an error. Do not retry the same call or route around it via bash — adjust the task or ask the user.
 `;
