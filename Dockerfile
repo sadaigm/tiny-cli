@@ -19,11 +19,19 @@ RUN pnpm deploy --legacy --filter=./packages/cli --prod /app/pruned
 # Stage 2: Runner — Bun runtime (required by OpenTUI)
 FROM oven/bun:1-slim AS runner
 
+# Node runtime for npx/node script invocations
+COPY --from=node:20-slim /usr/local/bin/node /usr/local/bin/node
+
 WORKDIR /app
 
-# OpenTUI text rendering needs fontconfig and at least one font
+# OpenTUI text rendering needs fontconfig and at least one font;
+# plus common OS tools the agent shells out to
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends fontconfig fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends \
+        fontconfig fonts-dejavu-core \
+        curl wget git jq ripgrep gawk less zip unzip \
+        openssh-client ca-certificates \
+        python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only the pruned production files from the builder
