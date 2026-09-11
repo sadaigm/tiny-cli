@@ -22,3 +22,6 @@ dist-bin/
 old
 .playwright-mcp
 opentui-docs-md
+
+# Local persistent home for the dockerized CLI (input history, sessions)
+tiny-cli-home/

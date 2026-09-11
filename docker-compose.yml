@@ -7,6 +7,8 @@ services:
     # Mount current directory to allow access to local files
     volumes:
       - ./workspace:/workspace
+      # Persist ~/.tiny-cli (input history, sessions) across container recreates
+      - ./tiny-cli-home:/root/.tiny-cli
     # Keep container running for interactive use
     stdin_open: true
     tty: true
