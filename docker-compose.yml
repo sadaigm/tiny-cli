@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   tiny-cli:
-    image: tiny-cli:latest
+    image: tiny-cli-tui:latest
     container_name: tiny-cli
     # Mount current directory to allow access to local files
     volumes:

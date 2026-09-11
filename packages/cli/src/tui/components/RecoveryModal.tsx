@@ -15,7 +15,7 @@ const OPTIONS: { key: RecoveryChoice; label: string; desc: string }[] = [
   { key: 'stop', label: 'Stop', desc: 'Abort plan execution' },
 ];
 
-export default function RecoveryModal({ recovery, onSelect }: RecoveryModalProps): React.ReactElement {
+export default function RecoveryModal({ recovery, onSelect }: RecoveryModalProps): React.ReactNode {
   const [selected, setSelected] = useState(0);
   // Mirror of `selected` for synchronous reads: when ↓↓ + Enter arrive in
   // one stdin chunk (fast typing / test scripts), the useInput callback

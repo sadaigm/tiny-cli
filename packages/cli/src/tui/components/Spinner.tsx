@@ -43,7 +43,7 @@ const INTERVAL_MS = 80;
  * {agentState === 'running' && <Spinner text="Thinking..." />}
  * ```
  */
-export default function Spinner({ text, type = 'dots', color = 'yellow' }: SpinnerProps): React.ReactElement {
+export default function Spinner({ text, type = 'dots', color = 'yellow' }: SpinnerProps): React.ReactNode {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((t) => t + 1), INTERVAL_MS);

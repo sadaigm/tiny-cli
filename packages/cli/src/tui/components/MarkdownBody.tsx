@@ -28,7 +28,7 @@ export default function MarkdownBody({ lines, color }: {
   lines: MdLine[];
   /** Entry body colour; styled lines (code/quote/hr/heading) take their own. */
   color?: string;
-}): React.ReactElement {
+}): React.ReactNode {
   const theme = getTheme();
   return (
     <Box flexDirection="column">
@@ -42,7 +42,7 @@ export default function MarkdownBody({ lines, color }: {
 }
 
 /** Render one laid-out line inside its (already-indented) row Box. */
-function renderLine(line: MdLine, color: string | undefined, accent: string): React.ReactElement {
+function renderLine(line: MdLine, color: string | undefined, accent: string): React.ReactNode {
   switch (line.style) {
     case 'heading':
       return (
@@ -67,7 +67,7 @@ function renderLine(line: MdLine, color: string | undefined, accent: string): Re
 }
 
 /** Render one {@link MdSpan} with its inline styling applied. */
-function renderSpan(span: MdSpan, key: number, boldAll = false): React.ReactElement {
+function renderSpan(span: MdSpan, key: number, boldAll = false): React.ReactNode {
   const segments = splitLinks(span.text);
   const base = {
     bold: span.bold || boldAll,

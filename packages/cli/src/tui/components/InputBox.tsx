@@ -137,7 +137,7 @@ function InputBox({
   onDraftLinesChange,
   focus = true,
   dispatch,
-}: InputBoxProps): React.ReactElement {
+}: InputBoxProps): React.ReactNode {
   const { stdout } = useStdout();
   const terminalColumns = stdout?.columns ?? 80;
   const [value, setValue] = useState('');

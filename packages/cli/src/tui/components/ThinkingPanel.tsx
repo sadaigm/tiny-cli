@@ -17,7 +17,7 @@ const MAX_LIVE_THINKING_CHARS = 600;
  * the store commits the full text as a normal (collapsed) reasoning log
  * entry and this panel renders nothing.
  */
-export default function ThinkingPanel({ columns = 80 }: { columns?: number }): React.ReactElement | null {
+export default function ThinkingPanel({ columns = 80 }: { columns?: number }): React.ReactNode | null {
   const store = useStreamStore();
   const section = useSyncExternalStore(store.subscribeThinking, store.getThinking);
   if (!section.active || !section.text) return null;

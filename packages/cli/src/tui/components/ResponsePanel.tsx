@@ -21,7 +21,7 @@ import { getTheme } from '../theme.js';
  * the pure function, and unterminated markers render literally until the
  * closing marker arrives.
  */
-export default function ResponsePanel({ columns = 80 }: { columns?: number }): React.ReactElement | null {
+export default function ResponsePanel({ columns = 80 }: { columns?: number }): React.ReactNode | null {
   const store = useStreamStore();
   const section = useSyncExternalStore(store.subscribeResponse, store.getResponse);
   if (!section.active || !section.text) return null;

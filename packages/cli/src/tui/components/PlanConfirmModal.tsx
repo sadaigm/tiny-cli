@@ -15,7 +15,7 @@ interface PlanConfirmModalProps {
 export default function PlanConfirmModal({
   taskCount,
   onSelect,
-}: PlanConfirmModalProps): React.ReactElement {
+}: PlanConfirmModalProps): React.ReactNode {
   // Default is "Execute" — same default as the old REPL confirm.
   const [selected, setSelected] = useState(0);
   const selectedRef = useRef(0);

@@ -32,7 +32,7 @@ export interface HeaderProps {
  * <Header model={config.model} endpoint={config.endpoint} sessionId={sessionId} />
  * ```
  */
-function Header({ model, endpoint, sessionId, version }: HeaderProps): React.ReactElement {
+function Header({ model, endpoint, sessionId, version }: HeaderProps): React.ReactNode {
   const theme = getTheme();
   return (
     <Box flexDirection="column">

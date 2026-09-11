@@ -11,7 +11,7 @@ const StreamContext = createContext<StreamStore | null>(null);
 export function StreamProvider({ store, children }: {
   store: StreamStore;
   children: React.ReactNode;
-}): React.ReactElement {
+}): React.ReactNode {
   return <StreamContext.Provider value={store}>{children}</StreamContext.Provider>;
 }
 

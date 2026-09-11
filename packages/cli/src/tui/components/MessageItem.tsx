@@ -124,7 +124,7 @@ function renderToolSummary(
   columns: number,
   bodyLines: SpecLine[],
   onToggle?: () => void,
-): React.ReactElement {
+): React.ReactNode {
   const marker = focused ? '▸ ' : '  ';
   const hint = !expanded && summary.hiddenLineCount > 1 ? `  ⤤ +${summary.hiddenLineCount} lines` : '';
   // The header row is a single line: header + hint + timing + collapse tag
@@ -165,7 +165,7 @@ function renderToolSummary(
  * Splits on {@link splitLinks} and wraps link segments in Ink's
  * `underline` style; plain segments keep the body colour.
  */
-export function renderBodyWithLinks(body: string, bodyColor: string | undefined): React.ReactElement {
+export function renderBodyWithLinks(body: string, bodyColor: string | undefined): React.ReactNode {
   // One <Text> per line: a single multi-line <text> node can draw over its
   // siblings; per-line nodes (MarkdownBody's shape) lay out reliably.
   return (
@@ -224,7 +224,7 @@ export default function MessageItem({
   maxLines,
   inTurn = false,
   onToggle,
-}: MessageItemProps): React.ReactElement {
+}: MessageItemProps): React.ReactNode {
   const color = entryColors()[entry.type];
   const timing = formatTiming(entry.timing);
   const marker = focused ? '▸ ' : '  ';

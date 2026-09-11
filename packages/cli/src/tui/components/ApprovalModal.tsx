@@ -48,7 +48,7 @@ const BUTTONS: { key: ApprovalChoice; label: string; shortcut: string; color: st
 export default function ApprovalModal({
   toolCall,
   onSelect,
-}: ApprovalModalProps): React.ReactElement {
+}: ApprovalModalProps): React.ReactNode {
   const [highlighted, setHighlighted] = useState(0);
   // Mirror for synchronous reads: arrow keys and Enter can arrive in one
   // stdin chunk before React re-renders, leaving the closure's

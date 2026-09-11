@@ -99,7 +99,7 @@ const isEnd = (input: string, key?: { end?: boolean }): boolean =>
 const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function MessageLog(
   { entries, maxHeight, active = false, browseMode = false, onBrowseModeChange, agentRunning = false, queuedCount = 0, mouseEnabled = true },
   ref,
-): React.ReactElement {
+): React.ReactNode {
   const { stdout } = useStdout();
 
   // Terminal dimensions (re-read every render so resize works).
@@ -386,7 +386,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   // window still render correctly: their header/rail covers only the visible
   // members (the estimator charged the header when the group's first member
   // entered the window).
-  const renderItem = (entry: LogEntry, index: number, inTurn = false): React.ReactElement => {
+  const renderItem = (entry: LogEntry, index: number, inTurn = false): React.ReactNode => {
     const isFocused = entry.id === entries[view.focusIndex]?.id;
     const budget = VISIBLE_BODY_BUDGET(paneHeight);
     const scrollable =
@@ -409,8 +409,8 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   };
 
   const theme = getTheme();
-  const renderChunks = (): React.ReactElement[] => {
-    const out: React.ReactElement[] = [];
+  const renderChunks = (): React.ReactNode[] => {
+    const out: React.ReactNode[] = [];
     for (const g of groups) {
       if (g.end <= win.startIndex || g.start >= win.endIndex) continue;
       const from = Math.max(g.start, win.startIndex);
@@ -522,7 +522,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
 function SpinnerStrip({ agentRunning, queuedCount }: {
   agentRunning: boolean;
   queuedCount: number;
-}): React.ReactElement {
+}): React.ReactNode {
   const store = useStreamStore();
   const spinner = useSyncExternalStore(store.subscribeSpinner, store.getSpinner);
   const theme = getTheme();

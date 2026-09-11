@@ -85,7 +85,7 @@ export default function App({
   session,
   initialMode,
   theme,
-}: AppProps): React.ReactElement {
+}: AppProps): React.ReactNode {
   const { exit } = useApp();
 
   const [state, dispatch] = useReducer(

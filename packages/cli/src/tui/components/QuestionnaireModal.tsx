@@ -41,7 +41,7 @@ export interface QuestionnaireModalProps {
 export default function QuestionnaireModal({
   questionnaire,
   onDone,
-}: QuestionnaireModalProps): React.ReactElement {
+}: QuestionnaireModalProps): React.ReactNode {
   const { payload } = questionnaire;
   const questions = payload.questions;
 

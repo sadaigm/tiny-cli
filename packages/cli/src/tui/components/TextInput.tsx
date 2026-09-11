@@ -64,7 +64,7 @@ export default function TextInput({
   focus = true,
   onSearch,
   cursorToEndSignal = 0,
-}: TextInputProps): React.ReactElement {
+}: TextInputProps): React.ReactNode {
   const ref = useRef<TextareaRenderable | null>(null);
   // Mirror for reading the freshest value inside event handlers.
   const valueRef = useRef(value);
