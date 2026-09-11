@@ -2,7 +2,7 @@ import { useCallback, type RefObject } from 'react';
 import type { TextareaRenderable } from '@opentui/core';
 import { useInput, type InkKey } from '../../compat.js';
 import { bindingFor, matchesBinding } from '../../keybindings.js';
-import { logDebug } from '@tiny-cli/core/src/logger.js';
+import { logDebug } from '@tiny-cli/core';
 
 export interface UseEditorKeysProps {
   /** Editor renderable ref (plainText read at submit time). */

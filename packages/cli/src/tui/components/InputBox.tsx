@@ -16,7 +16,7 @@ import {
 import { InputHistory, searchHistory } from '../utils/inputHistory.js';
 import { loadHistory } from '../utils/historyStore.js';
 import { getTheme } from '../theme.js';
-import { logDebug } from '@tiny-cli/core/src/logger.js';
+import { logDebug } from '@tiny-cli/core';
 import { log } from 'console';
 
 /**
