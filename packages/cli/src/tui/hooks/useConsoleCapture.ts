@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { logError, logTrace } from '@tiny-cli/core';
+import { logError, logTrace, setLogSink } from '@tiny-cli/core';
 import type { LogEntryType } from '../state.js';
 
 /**
@@ -134,8 +134,20 @@ export function useConsoleCapture(
       }
     };
 
+    // --- Route logger output into the message log too ---
+    // The core logger writes through pristine console methods (bypassing
+    // the overrides above) to avoid recursion; without a sink its lines
+    // print raw and corrupt the rendered TUI.
+    setLogSink((level, msg) => {
+      addLogRef.current({
+        type: level === 'ERROR' ? 'error' : 'info',
+        content: `[${level}] ${msg}`,
+      });
+    });
+
     // --- Restore on unmount ---
     return () => {
+      setLogSink(null);
       console.log = origLog;
       console.info = origInfo;
       console.error = origError;

@@ -45,6 +45,16 @@ function shouldLog(level: LogLevel): boolean {
 const origConsoleError = console.error;
 const origConsoleLog = console.log;
 
+// When the TUI is active it installs a sink here so logger output is
+// routed into the message log as entries — instead of printing through
+// the pristine console methods, which corrupt the rendered layout.
+type LogSink = (level: LogLevel, msg: string) => void;
+let _sink: LogSink | null = null;
+
+export function setLogSink(sink: LogSink | null): void {
+  _sink = sink;
+}
+
 function emit(level: LogLevel, msg: string) {
   const line = `[${level}] ${new Date().toISOString()} ${msg}`;
   // VERBOSE (TRACE/DEBUG) lines land in the file only when the level
@@ -53,8 +63,13 @@ function emit(level: LogLevel, msg: string) {
     appendToFile(line);
   }
   if (shouldLog(level)) {
-    if (level === 'ERROR') origConsoleError(line);
-    else origConsoleLog(line);
+    if (_sink) {
+      _sink(level, msg);
+    } else if (level === 'ERROR') {
+      origConsoleError(line);
+    } else {
+      origConsoleLog(line);
+    }
   }
 }
 
