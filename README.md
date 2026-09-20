@@ -74,7 +74,8 @@ graph TD
 | `/agent` | Switch to autonomous agent mode |
 | `/chat` | Switch to conversational chat mode |
 | `/plan` | Switch to planning mode |
-| `/model` | Select a different LLM model |
+| `/model` | Select a different LLM model (persisted per profile) |
+| `/profile` | Switch agent profile (provider + model) mid-conversation |
 | `/tools` | List available tools |
 | `/mcp` | Manage MCP server connections |
 | `/session` | List/Load/New conversation sessions |
@@ -294,6 +295,16 @@ pnpm --filter tiny-cli web        # → http://localhost:5173
 ## ⚙️ Configuration
 
 Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.json` (global).
+
+### Profiles & Switching
+
+`agents.json` holds an **array of profiles** (the example below is one entry). Each profile can point at a different provider (Ollama, Z.AI, any OpenAI-compatible endpoint) with its own model, prompts, and MCP servers.
+
+- `/profile` — pick from a selector (or `/profile <name>`) to switch **mid-conversation**: the full message history carries over; only the model client is rebuilt. Note that assistant `tool_calls` from one provider are replayed verbatim to the next — most OpenAI-compatible servers accept this.
+- The active profile is remembered in `preferences.json` (next to the resolved `agents.json`) and restored on the next launch; if the stored name no longer exists, `default` (or the first profile) is used.
+- `/model` choices are persisted per profile in the same `preferences.json` (`modelOverrides`) and survive restarts.
+- Resuming a session re-applies the profile it was last used with (`session.metadata.profileName`).
+
 
 ### Full Configuration Example
 
