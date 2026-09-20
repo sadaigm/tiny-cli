@@ -109,8 +109,9 @@ export class Agent {
 
   updateConfig(updates: Partial<AgentConfig>) {
     this.config = { ...this.config, ...updates };
-    // Re-initialize model client if model or endpoint changed
-    if (updates.model || updates.endpoint) {
+    // Re-initialize model client if the connection target changed
+    // (apiKey alone can differ between profiles on the same gateway)
+    if (updates.model || updates.endpoint || updates.apiKey) {
       this.model = new ModelClient(this.config);
     }
   }

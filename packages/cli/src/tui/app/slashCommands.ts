@@ -1,14 +1,15 @@
 import React, { useCallback } from 'react';
 import type { Agent, Session } from '@tiny-cli/core';
-import { SessionManager } from '@tiny-cli/core';
+import { SessionManager, logInfo, logError } from '@tiny-cli/core';
 import type { TuiState } from '../state.js';
 import type { MessageLogHandle } from '../components/MessageLog.js';
 import type { UseAgentApi } from '../hooks/useAgent.js';
 import type { AppDispatch } from './reducer.js';
 import { fetchModels } from '../../commands/handlers.js';
+import { loadProfiles, profileToConfig, writeActiveProfile, writeModelOverride, isProjectTrusted } from '../../config.js';
 import { SLASH_COMMANDS } from '../utils/commands.js';
 import { findInLog } from '../utils/logSearch.js';
-import { relativeTime } from './sessionLoad.js';
+import { relativeTime, applySessionProfile } from './sessionLoad.js';
 import { runSkillCommand, listSkillsCommand, createSkillCommand } from './skills.js';
 
 const HELP_KEY_LINES: string[] = [
@@ -170,6 +171,12 @@ export function createSlashCommands({
               const updated = agent.getConfig();
               dispatch({ type: 'SET_CONFIG', config: updated });
               addSystemLog(`Model updated to: ${requestedModel}`);
+              // Persist per-profile so the choice survives restarts.
+              const loaded = await loadProfiles();
+              if (loaded) {
+                const profile = loaded.profiles.find(p => p.name === updated.profileName);
+                await writeModelOverride(loaded.filePath, updated.profileName ?? '', profile?.model === requestedModel ? undefined : requestedModel);
+              }
             } catch (err: any) {
               addErrorLog(`Error: ${err.message}`);
             }
@@ -197,6 +204,67 @@ export function createSlashCommands({
           } catch (err: any) {
             addErrorLog(`Error fetching models: ${err.message}`);
           }
+          return true;
+        }
+
+        case 'profile': {
+          const requested = parts[1];
+
+          const applyProfile = async (name: string) => {
+            logInfo(`[profile] switch requested: ${name} (current: ${agent.getConfig().profileName ?? 'none'})`);
+            try {
+              const loaded = await loadProfiles();
+              if (!loaded) {
+                addErrorLog('No agents.json profiles found.');
+                logError('[profile] loadProfiles() returned null — no readable agents.json');
+                return;
+              }
+              const profile = loaded.profiles.find(p => p.name === name);
+              if (!profile) {
+                addErrorLog(`Profile "${name}" not found. Available: ${loaded.profiles.map(p => p.name).join(', ')}`);
+                logError(`[profile] "${name}" not in ${loaded.filePath} — available: ${loaded.profiles.map(p => p.name).join(', ')}`);
+                return;
+              }
+              const next = profileToConfig(profile, await isProjectTrusted());
+              // History (agent.messages) carries over — only the model client is rebuilt.
+              agent.updateConfig(next);
+              dispatch({ type: 'SET_CONFIG', config: next });
+              logInfo(`[profile] applied ${profile.name}: model=${next.model} endpoint=${next.endpoint} — dispatching SET_CONFIG`);
+              await writeActiveProfile(loaded.filePath, profile.name);
+              session.metadata.profileName = profile.name;
+              try {
+                await sessionManager.saveSession(session);
+              } catch (e) {
+                logError(`[profile] saveSession failed: ${e}`);
+              }
+              addSystemLog(`Profile switched to: ${profile.name} (model ${next.model})`);
+            } catch (e: any) {
+              logError(`[profile] switch to "${name}" failed: ${e?.stack ?? e?.message ?? e}`);
+              addErrorLog(`Profile switch failed: ${e?.message ?? e}`);
+            }
+          };
+
+          if (requested) {
+            await applyProfile(requested);
+            return true;
+          }
+
+          // Open profile picker overlay
+          const loaded = await loadProfiles();
+          if (!loaded) {
+            addErrorLog('No agents.json profiles found.');
+            return true;
+          }
+          const current = agent.getConfig().profileName ?? '';
+          dispatch({
+            type: 'OPEN_SELECTOR',
+            selector: {
+              kind: 'profile',
+              title: `Select Profile (current: ${current || 'none'})`,
+              items: loaded.profiles.map(p => p.name),
+              selectedIndex: Math.max(0, loaded.profiles.findIndex(p => p.name === current)),
+            },
+          });
           return true;
         }
 
@@ -283,6 +351,9 @@ export function createSlashCommands({
             if (newSession) {
               agent.setSessionId(id);
               agent.setHistory(newSession.messages);
+              await applySessionProfile(agent, newSession.metadata, (cfg) =>
+                dispatch({ type: 'SET_CONFIG', config: cfg })
+              );
               dispatch({ type: 'SET_SESSION_ID', sessionId: id });
               dispatch({ type: 'CLEAR_LOG' });
               addSystemLog(`Loaded session: ${id}`);

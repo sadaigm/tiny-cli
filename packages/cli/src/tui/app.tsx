@@ -59,6 +59,7 @@ import {
 import {
   relativeTime,
   createReplaySessionMessages,
+  applySessionProfile,
 } from "./app/sessionLoad.js";
 import { createSlashCommands } from "./app/slashCommands.js";
 
@@ -250,6 +251,10 @@ export default function App({
           addSystemLog(`Model updated to: ${chosen}`);
           break;
         }
+        case "profile": {
+          await handleSlashCommand(`/profile ${chosen}`);
+          break;
+        }
         case "thinking": {
           const cfg = agent.getConfig();
           const level = chosen as "off" | "low" | "medium" | "high";
@@ -289,6 +294,9 @@ export default function App({
           if (newSession) {
             agent.setSessionId(chosen);
             agent.setHistory(newSession.messages);
+            await applySessionProfile(agent, newSession.metadata, (cfg) =>
+              dispatch({ type: "SET_CONFIG", config: cfg })
+            );
             dispatch({ type: "SET_SESSION_ID", sessionId: chosen });
             dispatch({ type: "CLEAR_LOG" });
             addSystemLog(`Loaded session: ${chosen}`);
@@ -566,6 +574,9 @@ export default function App({
         break;
       case "thinking":
         handleSlashCommand(`/thinking ${value}`);
+        break;
+      case "profile":
+        handleSlashCommand(`/profile ${value}`);
         break;
       case "skill": {
         // Toggle the selected skill in config.activeSkills. The full body

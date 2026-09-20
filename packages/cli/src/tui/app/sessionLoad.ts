@@ -1,6 +1,26 @@
 import { useCallback } from 'react';
-import type { Session } from '@tiny-cli/core';
+import type { Agent, Session, SessionMetadata } from '@tiny-cli/core';
 import type { NewLogEntry } from '../hooks/useAgent.js';
+
+/**
+ * Re-applies the profile a session was last used with (if any). The session's
+ * stored profileName wins over the global preference; a stale name is ignored.
+ */
+export async function applySessionProfile(
+  agent: Agent,
+  metadata: SessionMetadata,
+  setConfig: (config: import('@tiny-cli/core').AgentConfig) => void
+): Promise<void> {
+  const name = metadata.profileName;
+  if (!name || name === agent.getConfig().profileName) return;
+  const { loadProfiles, profileToConfig, isProjectTrusted } = await import('../../config.js');
+  const loaded = await loadProfiles();
+  const profile = loaded?.profiles.find(p => p.name === name);
+  if (!profile) return;
+  const next = profileToConfig(profile, await isProjectTrusted());
+  agent.updateConfig(next);
+  setConfig(next);
+}
 
 /** Compact relative time like "2d ago" / "3h ago" / "just now". */
 export function relativeTime(iso: string): string {

@@ -78,6 +78,8 @@ export interface AgentConfig {
   enableSkillCommands?: boolean;
   /** Names of skills the user activated (e.g. via /skills); their full body is injected into the system prompt on every run. */
   activeSkills?: string[];
+  /** Name of the active agents.json profile (for /profile display + persistence). */
+  profileName?: string;
 }
 
 export interface ToolDefinition {
@@ -122,6 +124,8 @@ export interface SessionMetadata {
   lastUpdatedAt: string;
   title?: string;
   permissionMode?: PermissionMode;
+  /** agents.json profile active when this session was last used; applied on resume. */
+  profileName?: string;
 }
 
 export interface Session {

@@ -52,7 +52,61 @@ interface AgentProfile {
   enableSkillCommands?: boolean;
 }
 
-export async function loadConfig(): Promise<AgentConfig> {
+/** Tool-owned runtime state, stored in preferences.json next to the resolved agents.json. */
+interface Preferences {
+  /** Active agents.json profile name (falls back to 'default' || profiles[0] when unset/stale). */
+  activeProfile?: string;
+  /** Per-profile last-selected model (from /model); wins over the profile's model field. */
+  modelOverrides?: Record<string, string>;
+}
+
+function preferencesFilePath(agentsFilePath: string): string {
+  return path.join(path.dirname(agentsFilePath), 'preferences.json');
+}
+
+async function readPreferences(agentsFilePath: string): Promise<Preferences> {
+  const data = await tryReadFile(preferencesFilePath(agentsFilePath));
+  if (!data) return {};
+  try {
+    const parsed = JSON.parse(data);
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writePreferences(agentsFilePath: string, prefs: Preferences): Promise<void> {
+  try {
+    // Merge with what's on disk so concurrent writers don't clobber each other.
+    const merged = { ...(await readPreferences(agentsFilePath)), ...prefs };
+    await fs.writeFile(preferencesFilePath(agentsFilePath), JSON.stringify(merged, null, 2));
+  } catch {
+    // Unwritable location; skip persistence.
+  }
+}
+
+export async function readActiveProfile(agentsFilePath: string): Promise<string | undefined> {
+  return (await readPreferences(agentsFilePath)).activeProfile;
+}
+
+export async function writeActiveProfile(agentsFilePath: string, name: string): Promise<void> {
+  await writePreferences(agentsFilePath, { activeProfile: name });
+}
+
+export async function writeModelOverride(agentsFilePath: string, profileName: string, model: string | undefined): Promise<void> {
+  const prefs = await readPreferences(agentsFilePath);
+  const overrides = { ...(prefs.modelOverrides ?? {}) };
+  if (model === undefined) delete overrides[profileName];
+  else overrides[profileName] = model;
+  await writePreferences(agentsFilePath, { modelOverrides: overrides });
+}
+
+/**
+ * Resolves and parses agents.json with the same precedence as loadConfig:
+ * project-local first, then home. Auto-creates the home file when neither
+ * exists. Returns null when no readable profile list remains.
+ */
+export async function loadProfiles(): Promise<{ profiles: AgentProfile[]; filePath: string } | null> {
   // 1. Try project-local config (CWD)
   let configData = await tryReadFile(PROJECT_CONFIG_FILE);
   let configFilePath = PROJECT_CONFIG_FILE;
@@ -79,7 +133,7 @@ export async function loadConfig(): Promise<AgentConfig> {
         }
       }
     ];
-    
+
     try {
       const homeDir = path.dirname(HOME_PROJECT_CONFIG_FILE);
       await fs.mkdir(homeDir, { recursive: true });
@@ -91,67 +145,81 @@ export async function loadConfig(): Promise<AgentConfig> {
     }
   }
 
-  if (configData) {
+  if (!configData) return null;
+  try {
+    const profiles: AgentProfile[] = JSON.parse(configData);
+    if (!Array.isArray(profiles) || profiles.length === 0) return null;
+    return { profiles, filePath: configFilePath };
+  } catch {
+    return null;
+  }
+}
+
+/** Maps an agents.json profile to an AgentConfig. Applies the per-profile
+ * model override from preferences.json when present. */
+export function profileToConfig(profile: AgentProfile, trusted: boolean, prefs?: Preferences): AgentConfig {
+  const env = profile.environment;
+  const insecure = env?.insecure === true || env?.rejectUnauthorized === false;
+
+  return {
+    endpoint: `${env?.hostUrl || 'http://localhost:11434'}${env?.appBasePath || '/v1'}`,
+    model: prefs?.modelOverrides?.[profile.name] ?? profile.model,
+    temperature: profile.temperature,
+    systemPrompt: profile.systemPrompt,
+    prompts: profile.prompts,
+    apiKey: expandApiKey(env?.apiKey),
+    insecure: insecure,
+    mcpServers: profile.mcpServers,
+    permissionMode: profile.settings?.permissionMode,
+    logLevel: profile.logLevel,
+    maxIterations: profile.maxIterations,
+    compactionThresholdTokens: profile.compactionThresholdTokens,
+    compactionRetainTokens: profile.compactionRetainTokens,
+    skillsOptions: {
+      settingsSkills: profile.skills ?? [],
+      cliSkills: [],
+      noSkills: false,
+      trusted
+    },
+    enableSkillCommands: profile.enableSkillCommands !== false,
+    lastSessionId: profile.settings?.lastSessionId,
+    textToolCallFallback: profile.settings?.textToolCallFallback === true,
+    activeSkills: profile.settings?.activeSkills,
+    profileName: profile.name
+  };
+}
+
+export async function loadConfig(): Promise<AgentConfig> {
+  const loaded = await loadProfiles();
+  if (!loaded) return DEFAULT_CONFIG;
+  const { profiles, filePath: configFilePath } = loaded;
+  const prefs = await readPreferences(configFilePath);
+
+  // Selection: stored active profile, else the legacy default/first entry.
+  const profile = profiles.find(p => p.name === prefs.activeProfile)
+    || profiles.find(p => p.name === 'default')
+    || profiles[0];
+  if (!profile) return DEFAULT_CONFIG;
+
+  // permissionMode: settings block is the single source of truth.
+  // Migrate a legacy root-level key and drop it from the file.
+  if (profile.permissionMode !== undefined) {
+    if (profile.settings?.permissionMode === undefined) {
+      profile.settings = { ...profile.settings, permissionMode: profile.permissionMode };
+    } else if (profile.settings.permissionMode !== profile.permissionMode) {
+      console.warn(
+        `⚠️  ${configFilePath}: conflicting permissionMode keys — using settings.permissionMode "${profile.settings.permissionMode}" (root-level "${profile.permissionMode}" ignored)`
+      );
+    }
+    delete profile.permissionMode;
     try {
-      const profiles: AgentProfile[] = JSON.parse(configData);
-      const profile = profiles.find(p => p.name === 'default') || profiles[0];
-      
-      if (profile) {
-        // permissionMode: settings block is the single source of truth.
-        // Migrate a legacy root-level key and drop it from the file.
-        if (profile.permissionMode !== undefined) {
-          if (profile.settings?.permissionMode === undefined) {
-            profile.settings = { ...profile.settings, permissionMode: profile.permissionMode };
-          } else if (profile.settings.permissionMode !== profile.permissionMode) {
-            console.warn(
-              `⚠️  ${configFilePath}: conflicting permissionMode keys — using settings.permissionMode "${profile.settings.permissionMode}" (root-level "${profile.permissionMode}" ignored)`
-            );
-          }
-          delete profile.permissionMode;
-          try {
-            await fs.writeFile(configFilePath, JSON.stringify(profiles, null, 2));
-          } catch {
-            // Read-only config location; the in-memory migration still applies.
-          }
-        }
-
-        const env = profile.environment;
-        const insecure = env?.insecure === true || env?.rejectUnauthorized === false;
-
-        const config: AgentConfig = {
-          endpoint: `${env?.hostUrl || 'http://localhost:11434'}${env?.appBasePath || '/v1'}`,
-          model: profile.model,
-          temperature: profile.temperature,
-          systemPrompt: profile.systemPrompt,
-          prompts: profile.prompts,
-          apiKey: expandApiKey(env?.apiKey),
-          insecure: insecure,
-          mcpServers: profile.mcpServers,
-          permissionMode: profile.settings?.permissionMode,
-          logLevel: profile.logLevel,
-          maxIterations: profile.maxIterations,
-          compactionThresholdTokens: profile.compactionThresholdTokens,
-          compactionRetainTokens: profile.compactionRetainTokens,
-          skillsOptions: {
-            settingsSkills: profile.skills ?? [],
-            cliSkills: [],
-            noSkills: false,
-            trusted: await isProjectTrusted()
-          },
-          enableSkillCommands: profile.enableSkillCommands !== false,
-          lastSessionId: profile.settings?.lastSessionId,
-          textToolCallFallback: profile.settings?.textToolCallFallback === true,
-          activeSkills: profile.settings?.activeSkills
-        };
-
-        return config;
-      }
-    } catch (err) {
-      // Invalid JSON
+      await fs.writeFile(configFilePath, JSON.stringify(profiles, null, 2));
+    } catch {
+      // Read-only config location; the in-memory migration still applies.
     }
   }
 
-  return DEFAULT_CONFIG;
+  return profileToConfig(profile, await isProjectTrusted(), prefs);
 }
 
 /**
@@ -183,7 +251,7 @@ async function tryReadFile(filePath: string): Promise<string | null> {
  * No dedicated trust mechanism exists yet; a project that already carries a
  * local `.tiny-cli/agents.json` is treated as trusted for project-skill loading.
  */
-async function isProjectTrusted(): Promise<boolean> {
+export async function isProjectTrusted(): Promise<boolean> {
   try {
     await fs.access(PROJECT_CONFIG_FILE);
     return true;
@@ -208,7 +276,9 @@ export async function saveConfig(config: AgentConfig): Promise<void> {
 
   try {
     const profiles: AgentProfile[] = JSON.parse(data);
-    const profile = profiles.find(p => p.name === 'default') || profiles[0];
+    const profile = profiles.find(p => p.name === config.profileName)
+      || profiles.find(p => p.name === 'default')
+      || profiles[0];
     if (!profile) return;
 
     profile.settings = {
