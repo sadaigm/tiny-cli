@@ -393,12 +393,11 @@ function InputBox({
         /* Reverse-i-search prompt replaces the input line while active. */
         <Box>
           <Text color={getTheme().statusText} bold>
-            (r-search)
-          </Text>{' '}
+            (r-search){' '}
+          </Text>
           <Text dimColor>`</Text>
           <Text color={getTheme().statusText}>{searchQuery}</Text>
-          <Text dimColor>`</Text>{' '}
-          <Text dimColor>: </Text>
+          <Text dimColor>`: </Text>
           {searchResult ? (
             <Text>
               <Text dimColor>({searchResult.matchNumber}/{searchResult.matchCount}) </Text>

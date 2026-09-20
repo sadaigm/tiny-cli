@@ -7,7 +7,7 @@
  * width, one visual line per match — keeps the estimator trivial).
  */
 import type { ToolView, SpecLine } from './index.js';
-import { parseArgs, wrapIndent } from '../../utils/toolSummary.js';
+import { parseArgs, relPath, wrapIndent } from '../../utils/toolSummary.js';
 
 const MAX_MATCH_ROWS = 50;
 
@@ -17,7 +17,7 @@ export const grepView: ToolView = {
     if (entry.type === 'tool_call') {
       const args = parseArgs(entry.toolArgs);
       const head = `/${String(args?.pattern ?? '')}/`;
-      const scope = args?.path ? ` in ${String(args.path)}` : ' in project';
+      const scope = args?.path ? ` in ${relPath(String(args.path))}` : ' in project';
       return wrapIndent(head + scope, 0, usable).split('\n').map((text) => ({ text, dim: true }));
     }
 
@@ -40,7 +40,7 @@ export const grepView: ToolView = {
     let shown = 0;
     for (const [path, hits] of groups) {
       if (shown >= MAX_MATCH_ROWS) break;
-      lines.push({ text: path, dim: true });
+      lines.push({ text: relPath(path), dim: true });
       for (const hit of hits) {
         if (shown >= MAX_MATCH_ROWS) break;
         shown++;

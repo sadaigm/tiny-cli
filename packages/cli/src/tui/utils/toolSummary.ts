@@ -54,6 +54,17 @@ export function truncate(value: string, max: number): string {
   return single.length > max ? `${single.slice(0, max - 1)}…` : single;
 }
 
+/** Display path: relative to cwd when inside it, else middle-truncated. */
+export function relPath(filePath: string): string {
+  if (!filePath) return filePath;
+  const cwd = process.cwd();
+  if (filePath === cwd) return '.';
+  if (filePath.startsWith(cwd + '/')) return filePath.slice(cwd.length + 1);
+  if (filePath.length <= 40) return filePath;
+  const base = basename(filePath);
+  return `${filePath.slice(0, 40 - base.length - 1)}…/${base}`;
+}
+
 /** Basename of a path (last segment), for compact display. */
 function basename(filePath: string): string {
   const parts = filePath.replace(/\\/g, '/').split('/');
@@ -241,8 +252,20 @@ export function summarizeToolResult(entry: LogEntry, columns: number): ToolSumma
   const cap = Math.min(columns > 0 ? columns - 2 : MAX_HEADER_WIDTH, MAX_HEADER_WIDTH);
   const lines = lineCount(text);
   const firstLine = text.split(/\r?\n/)[0] ?? '';
+  // The runner's read header is busy (`[FILE: /abs/path | TOTAL LINES: N |
+  // SHOWING: a to b]`) — the icon prefix already marks this as a result, so
+  // show a compact path + line-count line instead of the raw first line.
+  const fm = firstLine.match(/^\[FILE: (.+) \| TOTAL LINES: (\d+) \| SHOWING: (\d+) to (\d+)\]/);
+  // Write-family tools print `Successfully updated /abs/path` — show the
+  // short display path instead of the raw absolute one.
+  const um = firstLine.match(/^Successfully updated (.+)$/);
+  const header = fm
+    ? `read: ${relPath(fm[1])} · ${fm[2]} lines (showing ${fm[3]}-${fm[4]})`
+    : um
+      ? `Successfully updated ${relPath(um[1])}`
+      : truncate(firstLine, cap);
   return {
-    header: `↳ ${truncate(firstLine, cap)}`,
+    header,
     detail: text ? capLines(text, MAX_DETAIL_LINES) : undefined,
     hiddenLineCount: lines,
   };

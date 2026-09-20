@@ -134,15 +134,16 @@ export function useConsoleCapture(
       }
     };
 
-    // --- Route logger output into the message log too ---
+    // --- Keep logger output out of the terminal while the TUI runs ---
     // The core logger writes through pristine console methods (bypassing
     // the overrides above) to avoid recursion; without a sink its lines
-    // print raw and corrupt the rendered TUI.
+    // print raw and corrupt the rendered TUI. The message log is for the
+    // user, not diagnostics — everything still lands in .tiny-cli/tui.log,
+    // so here we simply swallow console output. Only true failures are
+    // surfaced as error entries.
     setLogSink((level, msg) => {
-      addLogRef.current({
-        type: level === 'ERROR' ? 'error' : 'info',
-        content: `[${level}] ${msg}`,
-      });
+      if (level !== 'ERROR') return;
+      addLogRef.current({ type: 'error', content: `[ERROR] ${msg}` });
     });
 
     // --- Restore on unmount ---

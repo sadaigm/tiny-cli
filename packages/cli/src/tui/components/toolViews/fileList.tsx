@@ -6,7 +6,7 @@
  */
 import type { ToolView, SpecLine } from './index.js';
 import { wrapSpec } from './index.js';
-import { parseArgs } from '../../utils/toolSummary.js';
+import { parseArgs, relPath } from '../../utils/toolSummary.js';
 
 const MAX_ENTRIES = 100;
 
@@ -20,7 +20,7 @@ export const fileListView: ToolView = {
     const usable = Math.max(20, columns - 3);
     if (entry.type === 'tool_call') {
       const args = parseArgs(entry.toolArgs);
-      const meta = entry.toolName === 'glob' ? String(args?.pattern ?? '') : String(args?.path ?? '.');
+      const meta = entry.toolName === 'glob' ? String(args?.pattern ?? '') : relPath(String(args?.path ?? '.'));
       return wrapSpec(meta, columns);
     }
     const out = (entry.toolResult ?? '').trim();

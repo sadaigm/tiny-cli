@@ -63,7 +63,7 @@ export interface MessageItemProps {
 const ICONS: Record<LogEntryType, string> = {
   user: '❯',
   assistant: '●',
-  reasoning: '⋯',
+  reasoning: '💭',
   tool_call: '⎿',
   tool_result: '└',
   system: '·',
@@ -71,6 +71,74 @@ const ICONS: Record<LogEntryType, string> = {
   error: '✖',
   info: '·',
 };
+
+/**
+ * Terminal cell width of a string: East-Asian wide / emoji count 2 cells,
+ * zero-width joiners and variation selectors count 0. Header truncation
+ * must budget by cells or wide icons overflow the row and garble the line
+ * below.
+ */
+function displayWidth(str: string): number {
+  const chars = [...str];
+  let w = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const cp = chars[i].codePointAt(0) ?? 0;
+    if (cp === 0xfe0f || cp === 0x200d || (cp >= 0x0300 && cp <= 0x036f)) continue;
+    // Emoji presentation (U+FE0F follows): ambiguous-width glyphs like ⚙ (U+2699)
+    // render 2 cells when forced to emoji form.
+    const emoji = (chars[i + 1]?.codePointAt(0) ?? 0) === 0xfe0f;
+    if (
+      emoji ||
+      (cp >= 0x1100 && cp <= 0x115f) ||
+      (cp >= 0x2e80 && cp <= 0xa4cf) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0x1f300 && cp <= 0x1faff) ||
+      (cp >= 0x20000 && cp <= 0x3fffd)
+    ) {
+      w += 2;
+    } else {
+      w += 1;
+    }
+  }
+  return w;
+}
+
+/** Per-tool icon for tool_call/tool_result entries (fallback: ⎿ / ↳). */
+const TOOL_ICONS: Record<string, string> = {
+  read: '📖',
+  write: '📖',
+  insert_lines: '📖',
+  search_replace: '📖',
+  list: '📖',
+  grep: '🔍',
+  glob: '🔍',
+  bash: '⚙️',
+};
+
+/** First-result-line patterns that render an error result with ⚠ + red. */
+const ERROR_RESULT_RE = /^(Error|ERROR|⚠)|WORKSPACE BOUNDARY/;
+
+/** Icon for a tool entry: per-tool map, error override for results. */
+function toolIcon(entry: LogEntry): string {
+  if (entry.type === 'tool_result') {
+    const first = (entry.toolResult ?? entry.content ?? '').split('\n')[0] ?? '';
+    if (ERROR_RESULT_RE.test(first)) return '⚠';
+    return TOOL_ICONS[entry.toolName ?? ''] ?? '↳';
+  }
+  return TOOL_ICONS[entry.toolName ?? ''] ?? '⎿';
+}
+
+/** Header color for a tool entry: red when the result is an error. */
+function toolColor(entry: LogEntry, fallback: string): string {
+  if (entry.type === 'tool_result') {
+    const first = (entry.toolResult ?? entry.content ?? '').split('\n')[0] ?? '';
+    if (ERROR_RESULT_RE.test(first)) return 'red';
+  }
+  return fallback;
+}
 
 /** Chalk color name for each log entry type, from the active theme. */
 function entryColors(): Record<LogEntryType, string> {
@@ -92,13 +160,13 @@ function entryColors(): Record<LogEntryType, string> {
  * Formats timing information into a compact display string.
  *
  * @param timing - Optional timing data from the agent step.
- * @returns e.g. `" [45ms]"` or `" [AI: 1.2s | 120ms]"`, or empty string.
+ * @returns e.g. `" [45ms]"` or `" [1.2s | 120ms]"`, or empty string.
  */
 function formatTiming(timing?: LogEntry['timing']): string {
   if (!timing) return '';
   const parts: string[] = [];
   if (timing.modelChatMs) {
-    parts.push(`AI: ${(timing.modelChatMs / 1000).toFixed(1)}s`);
+    parts.push(`${(timing.modelChatMs / 1000).toFixed(1)}s`);
   }
   if (timing.toolCallMs) {
     parts.push(`${Math.round(timing.toolCallMs)}ms`);
@@ -129,9 +197,11 @@ function renderToolSummary(
   const hint = !expanded && summary.hiddenLineCount > 1 ? `  ⤤ +${summary.hiddenLineCount} lines` : '';
   // The header row is a single line: header + hint + timing + collapse tag
   // must fit `columns` or the overflowing row paints over the body below
-  // (garbled interleaved text) — truncate the header to what's left.
+  // (garbled interleaved text) — truncate the header to what's left. Icons
+  // are measured in terminal cells, not chars: emoji render 2 cells wide
+  // and the ⚙️ variation selector renders 0, so icon.length under-counts.
   const suffix = `${hint}${timing}${expanded && bodyLines.length > 0 ? '  ⤤ collapse' : ''}`;
-  const header = truncate(summary.header, Math.max(4, columns - marker.length - icon.length - 1 - suffix.length));
+  const header = truncate(summary.header, Math.max(4, columns - marker.length - displayWidth(icon) - 1 - suffix.length));
 
   return (
     <Box flexDirection="column">
@@ -247,7 +317,7 @@ export default function MessageItem({
     const summary = summarizeToolCall(entry, columns);
     const view = toolView(entry.toolName);
     const lines = view.body(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_call, color, timing, expanded, focused, columns, sliceSpec(lines), onToggle);
+    return renderToolSummary(summary, toolIcon(entry), toolColor(entry, color), timing, expanded, focused, columns, sliceSpec(lines), onToggle);
   }
 
   // --- Tool result: first line when collapsed, full when expanded ---
@@ -255,7 +325,7 @@ export default function MessageItem({
     const summary = summarizeToolResult(entry, columns);
     const view = toolView(entry.toolName);
     const lines = view.body(entry, columns);
-    return renderToolSummary(summary, ICONS.tool_result, color, timing, expanded, focused, columns, sliceSpec(lines), onToggle);
+    return renderToolSummary(summary, toolIcon(entry), toolColor(entry, color), timing, expanded, focused, columns, sliceSpec(lines), onToggle);
   }
 
   // --- Reasoning: streams in full while its entry is live (thinking

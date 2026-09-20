@@ -9,7 +9,7 @@
  */
 import type { ToolView, SpecLine } from './index.js';
 import { wrapSpec } from './index.js';
-import { parseArgs } from '../../utils/toolSummary.js';
+import { parseArgs, relPath } from '../../utils/toolSummary.js';
 
 const MAX_ROWS = 100;
 
@@ -44,7 +44,7 @@ export const fileReadView: ToolView = {
       if (args?.startLine || args?.endLine) range = ` · L${args?.startLine ?? 1}-${args?.endLine ?? 'end'}`;
       else if (args?.first250) range = ' · first 250';
       else if (args?.last100) range = ' · last 100';
-      return wrapSpec(path + range, columns);
+      return wrapSpec(relPath(path) + range, columns);
     }
     const raw = entry.toolResult ?? entry.content ?? '';
     const head = raw.split('\n')[0] ?? '';
@@ -55,7 +55,7 @@ export const fileReadView: ToolView = {
       rows.push(rm ? { n: Number(rm[1]), text: rm[2] } : { text: line });
     }
     if (!m) return wrapSpec(raw, columns); // unexpected shape → plain
-    const meta = `${m[1]} · L${m[3]}-${m[4]} of ${m[2]}`;
+    const meta = `read: ${relPath(m[1])} · ${m[2]} lines (showing ${m[3]}-${m[4]})`;
     return [{ text: meta, dim: true }, ...gutterLines(rows, usable)];
   },
 };
