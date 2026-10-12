@@ -6,7 +6,7 @@ import React, {
   useState,
 } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "./compat.js";
-import { logTrace, SessionManager } from "@tiny-cli/core";
+import { logTrace, logInfo, logError, SessionManager } from "@tiny-cli/core";
 import type { Agent, Session, AgentConfig } from "@tiny-cli/core";
 
 import type {
@@ -418,18 +418,46 @@ export default function App({
   const lastCtrlCRef = useRef(0);
   const CTRL_C_WINDOW_MS = 2000;
 
+  // Exit must never be held hostage by cleanup: destroy() awaits MCP server
+  // teardown, and an unresponsive stdio server would hang it forever — give
+  // it a short grace period, then exit regardless.
+  const destroyAndExit = () => {
+    // Grace must exceed McpManager.CLOSE_TIMEOUT_MS (1s) so the bounded MCP
+    // teardown normally finishes first and the clean shutdown path runs.
+    const grace = new Promise<void>((r) => setTimeout(r, 1500));
+    Promise.race([
+      agent.destroy().then(() => logInfo("[exit] destroy() settled"), () => logInfo("[exit] destroy() rejected")),
+      grace.then(() => logInfo("[exit] grace timeout — destroying anyway")),
+    ]).finally(() => {
+      logInfo("[exit] calling exit()");
+      exit();
+      // If ink's exit() fails to terminate the process, force it after a
+      // beat so a stuck render loop can never trap the terminal.
+      setTimeout(() => {
+        logError("[exit] process still alive after exit() — forcing exit");
+        process.exit(0);
+      }, 1000);
+    });
+  };
+
   useInput((input, key) => {
     try {
+    // Diagnostics: record every key that reaches the global handler and why
+    // it might be skipped — Ctrl+D exit issues are debugged from tui.log.
+    // (logInfo, not logDebug — logDebug is filtered out of tui.log.)
+    const skipReason = stateRef.current.pendingApproval ? 'approval'
+      : stateRef.current.pendingQuestions ? 'questions'
+      : stateRef.current.pendingRecovery ? 'recovery'
+      : stateRef.current.pendingPlanConfirm ? 'planConfirm'
+      : stateRef.current.pendingSelector ? 'selector'
+      : searchActiveRef.current ? 'search'
+      : browseModeRef.current ? 'browse'
+      : undefined;
+    if (key.ctrl || skipReason) {
+      logInfo(`[keys] input=${JSON.stringify(input)} ctrl=${!!key.ctrl} skip=${skipReason ?? 'no'}`);
+    }
     // Don't intercept when an overlay/modal is handling its own input.
-    if (stateRef.current.pendingApproval) return;
-    if (stateRef.current.pendingQuestions) return;
-    if (stateRef.current.pendingRecovery) return;
-    if (stateRef.current.pendingPlanConfirm) return;
-    if (stateRef.current.pendingSelector) return;
-    // Ctrl+R search owns Esc (cancel search) — must not abort the turn.
-    if (searchActiveRef.current) return;
-    // Browse mode owns Esc too (exit browse back to typing).
-    if (browseModeRef.current) return;
+    if (skipReason) return;
 
     // Ctrl+S (or its remap) opens the session switcher.
     if (matchesBinding(input, key, bindingFor("sessionSwitcher"))) {
@@ -451,13 +479,15 @@ export default function App({
 
     }
 
-    // Ctrl+D exits immediately; Ctrl+C needs a second press.
-    if (key.ctrl && input === "d") {
-      agent.destroy().finally(() => exit());
+    // Ctrl+D exits immediately; Ctrl+C needs a second press. Some terminals
+    // deliver Ctrl+D as the raw byte \x04 instead of the letter "d".
+    if (key.ctrl && (input === "d" || input === "\x04")) {
+      logInfo("[exit] Ctrl+D — destroyAndExit()");
+      destroyAndExit();
     } else if (key.ctrl && input === "c") {
       const now = Date.now();
       if (now - lastCtrlCRef.current <= CTRL_C_WINDOW_MS) {
-        agent.destroy().finally(() => exit());
+        destroyAndExit();
       } else {
         lastCtrlCRef.current = now;
         addSystemLog(

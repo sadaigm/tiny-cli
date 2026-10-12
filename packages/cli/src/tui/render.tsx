@@ -102,6 +102,11 @@ export async function startTui(opts: StartTuiOptions): Promise<void> {
     } finally {
       renderer.destroy(); // idempotent; restores terminal state
       resolveExit();
+      // The terminal is restored and every effect is down — exit
+      // deterministically. Lingering open handles (keep-alive sockets,
+      // renderer timers, an MCP child that ignored SIGKILL timing) would
+      // otherwise keep the event loop alive with a dead UI.
+      setImmediate(() => process.exit(0));
     }
   };
   // Any path that destroys the renderer without going through shutdown()

@@ -46,6 +46,13 @@ export function useEditorKeys({
         return;
       }
       logDebug(`TextInput: input=${JSON.stringify(input)}, key=${JSON.stringify(key)}`);
+      // Ctrl+D is the app-level "exit immediately" key. preventDefault() so
+      // the focused textarea cannot consume it as delete-forward — the
+      // app-level useInput handler performs the actual exit.
+      if (key.ctrl && (input === 'd' || input === '\x04')) {
+        key.preventDefault();
+        return;
+      }
       // The history-search hotkey (Ctrl+R by default, remappable) opens
       // reverse-i-search of the input history.
       if (matchesBinding(input, key, bindingFor('historySearch')) && onSearch) {

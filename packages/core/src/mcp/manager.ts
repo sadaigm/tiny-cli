@@ -11,6 +11,8 @@ export interface McpTool {
 }
 
 export class McpManager {
+  /** Max wait per MCP server on teardown before killing its child process. */
+  private static readonly CLOSE_TIMEOUT_MS = 1000;
   private clients: Map<string, Client> = new Map();
   private tools: Map<string, McpTool[]> = new Map();  // keyed by server name
   private transports: Map<string, any> = new Map(); // Store transports for cleanup
@@ -118,8 +120,25 @@ export class McpManager {
 
   async close(): Promise<void> {
     const names = Array.from(this.clients.keys());
-    for (const name of names) {
-      await this.disconnect(name);
+    // Close all servers in parallel, each with a timeout: client.close() on a
+    // stdio server awaits the child's exit, and an unresponsive child would
+    // hang teardown forever (and keep the process alive via the open pipe).
+    await Promise.all(names.map((name) => this.disconnectBounded(name)));
+  }
+
+  /** Disconnect one server, but never hang: after CLOSE_TIMEOUT_MS the stdio
+   *  child is killed directly so both the close and the event loop settle. */
+  private async disconnectBounded(name: string): Promise<void> {
+    const timeout = new Promise<void>((r) => setTimeout(r, McpManager.CLOSE_TIMEOUT_MS));
+    await Promise.race([this.disconnect(name), timeout]);
+    const transport = this.transports.get(name) as any;
+    try {
+      // StdioClientTransport keeps the child process private; kill it via
+      // whatever handle it exposes. Already-dead children are a no-op.
+      transport?._process?.kill?.('SIGKILL');
+      transport?._spawnedProcess?.kill?.('SIGKILL');
+    } catch {
+      // Best-effort only; the timeout already unblocked the caller.
     }
   }
 
