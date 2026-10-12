@@ -1,4 +1,4 @@
-import { ToolDefinition } from '../types.js';
+import { ToolDefinition, ExecTarget } from '../types.js';
 import type { AskUserPayload, AskUserResponse } from '../types.js';
 
 export type ToolContext = {
@@ -6,6 +6,10 @@ export type ToolContext = {
   cwd?: string;
   /** Workspace boundary enforcement (config securedMode; undefined = on). */
   securedMode?: boolean;
+  /** Execution target for bash (docker container / ssh host); unset = local. File tools map paths through its `root`. */
+  execTarget?: ExecTarget;
+  /** Active profile name (used in exec-target block messages). */
+  profileName?: string;
   /** Interactive question channel (wired by Agent.run when the host provides onAskUser). */
   askUser?: (payload: AskUserPayload) => Promise<AskUserResponse>;
 };

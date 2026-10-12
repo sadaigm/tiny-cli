@@ -6,6 +6,7 @@ import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
 import { guardPath } from '../bashGuard.js';
+import { resolveToolPath } from '../execTarget.js';
 
 /**
  * fs.promises.glob (Node >=22) is present at runtime but absent from
@@ -47,9 +48,16 @@ export function register(registry: ToolRegistry) {
   };
   registry.register(globDef, async (args, context) => {
     if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
+    // Branch 1 — exec-target profile: map the pattern's path prefix through
+    // the target root (or block it with the not-mapped message).
+    // Branch 2 — local profile: keep the pattern verbatim (absolutizing it
+    // would change fs.glob behavior and break byte-identical local use).
+    const mapped = context?.execTarget ? resolveToolPath(args.pattern, context) : { ok: true as const, hostPath: args.pattern as string };
+    if (!mapped.ok) return mapped.reason;
+    const pattern = mapped.hostPath;
     if (context?.securedMode !== false) {
       // glob patterns carry a path prefix (`../x/**`, `/etc/*`); guard it
-      const guard = guardPath(args.pattern, process.cwd());
+      const guard = guardPath(pattern, context?.execTarget?.hostRoot ?? process.cwd());
       if (guard) return guard;
     }
     try {
@@ -58,7 +66,7 @@ export function register(registry: ToolRegistry) {
       // only expanded against the cwd and silently dropped `**`.
       // fs.glob is present at runtime but absent from @types/node@20, so bind
       // it through the fs namespace with a minimal typed shim.
-      const matches = await collectGlob(args.pattern, process.cwd());
+      const matches = await collectGlob(pattern, process.cwd());
       return matches.length ? matches.join('\n') : 'No files found.';
     } catch (err) {
       return `Error: ${(err as Error).message}`;

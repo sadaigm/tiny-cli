@@ -18,6 +18,11 @@ export async function applySessionProfile(
   const profile = loaded?.profiles.find(p => p.name === name);
   if (!profile) return;
   const next = profileToConfig(profile, await isProjectTrusted());
+  if (next.execTarget) {
+    const { resolveHostRoot } = await import('@tiny-cli/core');
+    const pair = await resolveHostRoot(next.execTarget);
+    if (pair) next.execTarget = { ...next.execTarget, root: pair.root, hostRoot: pair.hostRoot };
+  }
   agent.updateConfig(next);
   setConfig(next);
 }

@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import type { Agent, Session } from '@tiny-cli/core';
-import { SessionManager, logInfo, logError } from '@tiny-cli/core';
+import { SessionManager, logInfo, logError, validateExecTarget, resolveHostRoot } from '@tiny-cli/core';
 import type { TuiState } from '../state.js';
 import type { MessageLogHandle } from '../components/MessageLog.js';
 import type { UseAgentApi } from '../hooks/useAgent.js';
@@ -83,7 +83,12 @@ export function createSlashCommands({
               const { saveConfig } = await import('../../config.js');
               await saveConfig(c);
             }
-            await agent.destroy();
+            // Same grace-period race as Ctrl+D: an unresponsive MCP server
+            // must not keep the process (and the terminal) alive.
+            await Promise.race([
+              agent.destroy().catch(() => {}),
+              new Promise<void>((r) => setTimeout(r, 500)),
+            ]);
           } catch {
             // ignore
           }
@@ -225,7 +230,31 @@ export function createSlashCommands({
                 logError(`[profile] "${name}" not in ${loaded.filePath} — available: ${loaded.profiles.map(p => p.name).join(', ')}`);
                 return;
               }
+              // Exec-target validation BEFORE applying: on failure the switch
+              // is refused (previous profile retained) with the failing check.
+              if (profile.exec) {
+                try {
+                  await validateExecTarget(profile.exec);
+                } catch (e: any) {
+                  logError(`[profile] exec-target validation failed: ${e?.message ?? e}`);
+                  addErrorLog(`Profile switch refused: exec target check failed — ${e?.message ?? e}`);
+                  return;
+                }
+              }
               const next = profileToConfig(profile, await isProjectTrusted());
+              // Resolve the host dir mirroring the target root (container:
+              // from its bind mounts). Unresolvable root → file tools are
+              // blocked per the design's block rule, never silently mapped
+              // onto an unrelated local directory.
+              if (next.execTarget) {
+                const pair = await resolveHostRoot(next.execTarget);
+                if (pair) next.execTarget = { ...next.execTarget, root: pair.root, hostRoot: pair.hostRoot };
+                else if (next.execTarget.root) {
+                  logError(`[profile] exec root ${next.execTarget.root} has no host mapping — file tools blocked (bash-only)`);
+                  const kind = next.execTarget.kind === 'container' ? next.execTarget.container : next.execTarget.host;
+                  addErrorLog(`Note: ${next.execTarget.root} is not a folder bind-mounted into ${kind} — file tools are blocked; use bash. Hint: "root" is the HOST-side mounted folder; tiny-cli finds where it lives inside the container via its bind mounts.`);
+                }
+              }
               // History (agent.messages) carries over — only the model client is rebuilt.
               agent.updateConfig(next);
               dispatch({ type: 'SET_CONFIG', config: next });
@@ -237,7 +266,10 @@ export function createSlashCommands({
               } catch (e) {
                 logError(`[profile] saveSession failed: ${e}`);
               }
-              addSystemLog(`Profile switched to: ${profile.name} (model ${next.model})`);
+              const target = next.execTarget
+                ? ` (in: ${next.execTarget.kind === 'container' ? next.execTarget.container : next.execTarget.host})`
+                : '';
+              addSystemLog(`Profile switched to: ${profile.name} (model ${next.model})${target}`);
             } catch (e: any) {
               logError(`[profile] switch to "${name}" failed: ${e?.stack ?? e?.message ?? e}`);
               addErrorLog(`Profile switch failed: ${e?.message ?? e}`);

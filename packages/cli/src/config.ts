@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig, PermissionMode, LogLevel } from '@tiny-cli/core';
+import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig, PermissionMode, LogLevel, ExecTarget } from '@tiny-cli/core';
 
 const PROJECT_CONFIG_FILE = path.join(process.cwd(), '.tiny-cli', 'agents.json');
 const HOME_PROJECT_CONFIG_FILE = path.join(os.homedir(), '.tiny-cli', 'agents.json');
@@ -50,6 +50,8 @@ interface AgentProfile {
   skills?: string[];
   /** Whether /skill:<name> TUI commands are enabled. Defaults to true. */
   enableSkillCommands?: boolean;
+  /** Where the bash tool executes (docker container / ssh host); unset = local. */
+  exec?: ExecTarget;
 }
 
 /** Tool-owned runtime state, stored in preferences.json next to the resolved agents.json. */
@@ -185,7 +187,8 @@ export function profileToConfig(profile: AgentProfile, trusted: boolean, prefs?:
     lastSessionId: profile.settings?.lastSessionId,
     textToolCallFallback: profile.settings?.textToolCallFallback === true,
     activeSkills: profile.settings?.activeSkills,
-    profileName: profile.name
+    profileName: profile.name,
+    execTarget: profile.exec
   };
 }
 
@@ -219,7 +222,16 @@ export async function loadConfig(): Promise<AgentConfig> {
     }
   }
 
-  return profileToConfig(profile, await isProjectTrusted(), prefs);
+  const config = profileToConfig(profile, await isProjectTrusted(), prefs);
+  // Startup profile load: resolve the exec target's host mirror dir now
+  // (container: bind-mount source; remote: explicit hostRoot). Unresolvable
+  // root → hostRoot stays unset → file tools block ("Use bash.") at runtime.
+  if (config.execTarget) {
+    const { resolveHostRoot } = await import('@tiny-cli/core');
+    const pair = await resolveHostRoot(config.execTarget);
+    if (pair) config.execTarget = { ...config.execTarget, root: pair.root, hostRoot: pair.hostRoot };
+  }
+  return config;
 }
 
 /**

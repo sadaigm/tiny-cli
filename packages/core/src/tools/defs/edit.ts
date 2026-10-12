@@ -6,6 +6,7 @@ import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
 import { guardPath } from '../bashGuard.js';
+import { resolveToolPath } from '../execTarget.js';
 
 export function register(registry: ToolRegistry) {
   // search_replace
@@ -25,9 +26,11 @@ export function register(registry: ToolRegistry) {
   };
   registry.register(searchReplaceDef, async (args, context) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
-    const fullPath = path.resolve(process.cwd(), args.path);
+    const mapped = resolveToolPath(args.path, context);
+    if (!mapped.ok) return mapped.reason;
+    const fullPath = mapped.hostPath;
     if (context?.securedMode !== false) {
-      const guard = guardPath(fullPath, process.cwd());
+      const guard = guardPath(fullPath, context?.execTarget?.hostRoot ?? process.cwd());
       if (guard) return guard;
     }
     const content = await readFile(fullPath, 'utf-8');
@@ -68,9 +71,11 @@ export function register(registry: ToolRegistry) {
   };
   registry.register(insertLinesDef, async (args, context) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
-    const fullPath = path.resolve(process.cwd(), args.path);
+    const mapped = resolveToolPath(args.path, context);
+    if (!mapped.ok) return mapped.reason;
+    const fullPath = mapped.hostPath;
     if (context?.securedMode !== false) {
-      const guard = guardPath(fullPath, process.cwd());
+      const guard = guardPath(fullPath, context?.execTarget?.hostRoot ?? process.cwd());
       if (guard) return guard;
     }
     const content = await readFile(fullPath, 'utf-8');
@@ -102,9 +107,11 @@ export function register(registry: ToolRegistry) {
   registry.register(writeDef, async (args, context) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing or invalid. You must provide the file path.';
     if (args.content === undefined) return 'Error: "content" argument is missing. You must generate the full file content yourself and retry the write with a complete "content" string. Do not ask the user for it.';
-    const fullPath = path.resolve(process.cwd(), args.path);
+    const mapped = resolveToolPath(args.path, context);
+    if (!mapped.ok) return mapped.reason;
+    const fullPath = mapped.hostPath;
     if (context?.securedMode !== false) {
-      const guard = guardPath(fullPath, process.cwd());
+      const guard = guardPath(fullPath, context?.execTarget?.hostRoot ?? process.cwd());
       if (guard) return guard;
     }
     try {

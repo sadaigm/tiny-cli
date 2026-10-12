@@ -6,6 +6,7 @@ import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
 import { guardPath } from '../bashGuard.js';
+import { resolveToolPath } from '../execTarget.js';
 
 /** grep tool: extensions searched by default (noise control — lockfiles,
  *  assets and vendored code stay out of results unless opted in). */
@@ -62,9 +63,11 @@ export function register(registry: ToolRegistry) {
   registry.register(grepDef, async (args, context) => {
     if (!args.pattern || typeof args.pattern !== 'string') return 'Error: "pattern" argument is missing or invalid.';
     const target = typeof args.path === 'string' && args.path ? args.path : '.';
-    const fullPath = path.resolve(process.cwd(), target);
+    const mapped = resolveToolPath(target, context);
+    if (!mapped.ok) return mapped.reason;
+    const fullPath = mapped.hostPath;
     if (context?.securedMode !== false) {
-      const guard = guardPath(fullPath, process.cwd());
+      const guard = guardPath(fullPath, context?.execTarget?.hostRoot ?? process.cwd());
       if (guard) return guard;
     }
     return new Promise((resolve) => {

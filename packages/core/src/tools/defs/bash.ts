@@ -7,6 +7,7 @@ import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
 import { checkBashRedirect, recordRedirectCount } from '../bashRedirect.js';
 import { checkBashBoundary } from '../bashGuard.js';
+import { wrapBashCmd } from '../execTarget.js';
 
 export function register(registry: ToolRegistry) {
   // bash
@@ -61,20 +62,36 @@ export function register(registry: ToolRegistry) {
     // project folder; toolchain binaries execute but never read as data;
     // credentials hard-block; git identity needs user consent.
     if (context?.securedMode !== false) {
-      const boundary = await checkBashBoundary(command, context?.cwd || process.cwd(), context?.askUser);
+      // Boundary anchor: local profiles anchor to the host project dir.
+      // Exec-target profiles anchor to the TARGET's path space instead — the
+      // model's commands carry container/remote paths (/data/...), which are
+      // meaningless against the host cwd (they'd all look "outside" and be
+      // blocked). With a root, confinement is the target workspace; without
+      // one (bash-only), the container/host itself is the sandbox, so no
+      // path confinement beyond the other boundary rules.
+      const boundaryRoot = context?.execTarget
+        ? (context.execTarget.root ?? '/')
+        : (context?.cwd || process.cwd());
+      const boundary = await checkBashBoundary(command, boundaryRoot, context?.askUser);
       if (boundary) {
         logDebug(`[bash-guard] ${boundary.key}: ${command.trim()}`);
         return boundary.message;
       }
     }
     return new Promise((resolve) => {
+      // Branch 1 — exec-target profile: wrap the command for the container/
+      // ssh host (design §4 edges E/F). Branch 2 — local profile: run the
+      // command unchanged (design §4 edge C, byte-identical). Either way the
+      // redirect/boundary checks above saw the raw model command (intent),
+      // and the output contract below is identical for both branches.
+      const wrapped = context?.execTarget ? wrapBashCmd(context.execTarget, command) : command;
       // A non-zero exit is data, not a tool failure: chains like
       // `cd X && ls missing-file` should surface BOTH the successful echo
       // output AND the ls stderr, so the model can read the whole picture
       // instead of bailing on the first failing segment. Only treat a total
       // inability to run (nothing on stdout/stderr, e.g. command not found)
       // as a genuine error. stdout and stderr are merged like a real shell.
-      exec(command as string, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      exec(wrapped as string, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
         const combined = [stdout, stderr].filter(Boolean).join('\n').trim();
         if (combined) {
           resolve(combined);

@@ -35,6 +35,14 @@ export interface McpServerConfig {
   url?: string;
 }
 
+/** Where a profile's bash tool executes: a docker container or an ssh host.
+ * `root` is the target's project root (container WORKDIR / remote project
+ * dir); file tools map model paths through it onto the host project dir.
+ * Absent `root` → file tools are blocked for that profile (bash-only). */
+export type ExecTarget =
+  | { kind: 'container'; container: string; shell?: string; root?: string; hostRoot?: string }
+  | { kind: 'remote'; host: string; shell?: string; root?: string; hostRoot?: string };
+
 export type PermissionMode = 'notify' | 'auto-edit' | 'auto';
 export type LogLevel = 'TRACE' | 'DEBUG' | 'LOG' | 'ERROR';
 
@@ -80,6 +88,8 @@ export interface AgentConfig {
   activeSkills?: string[];
   /** Name of the active agents.json profile (for /profile display + persistence). */
   profileName?: string;
+  /** Execution target for the bash tool (docker container / ssh host); unset = local execution. */
+  execTarget?: ExecTarget;
 }
 
 export interface ToolDefinition {

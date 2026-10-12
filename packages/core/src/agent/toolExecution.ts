@@ -165,7 +165,7 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
   // ----------------------------------------------------------------
   const gate = new MutationGate();
   const pathMutex = new MutexMap();
-  const execContext = { sessionId: config.sessionId, cwd: process.cwd(), askUser: onAskUser, securedMode: config.securedMode !== false };
+  const execContext = { sessionId: config.sessionId, cwd: process.cwd(), askUser: onAskUser, securedMode: config.securedMode !== false, execTarget: config.execTarget, profileName: config.profileName };
 
   // Execution windows [start, end] per entry index, used to report
   // observed concurrency for this batch.

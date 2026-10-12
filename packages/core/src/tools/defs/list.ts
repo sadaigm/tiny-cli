@@ -6,6 +6,7 @@ import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
 import { guardPath } from '../bashGuard.js';
+import { resolveToolPath } from '../execTarget.js';
 
 export function register(registry: ToolRegistry) {
   // list
@@ -22,9 +23,11 @@ export function register(registry: ToolRegistry) {
   };
   registry.register(listDef, async (args, context) => {
     const target = typeof args.path === 'string' && args.path ? args.path : '.';
-    const fullPath = path.resolve(process.cwd(), target);
+    const mapped = resolveToolPath(target, context);
+    if (!mapped.ok) return mapped.reason;
+    const fullPath = mapped.hostPath;
     if (context?.securedMode !== false) {
-      const guard = guardPath(fullPath, process.cwd());
+      const guard = guardPath(fullPath, context?.execTarget?.hostRoot ?? process.cwd());
       if (guard) return guard;
     }
     const files = await readdir(fullPath, { withFileTypes: true });

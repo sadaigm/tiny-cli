@@ -6,6 +6,7 @@ import { ToolDefinition } from '../../types.js';
 import { logDebug } from '../../logger.js';
 import { ToolRegistry } from '../registry.js';
 import { guardPath } from '../bashGuard.js';
+import { resolveToolPath } from '../execTarget.js';
 
 export function register(registry: ToolRegistry) {
   // read
@@ -27,9 +28,11 @@ export function register(registry: ToolRegistry) {
 
   registry.register(readDef, async (args, context) => {
     if (!args.path || typeof args.path !== 'string') return 'Error: "path" argument is missing.';
-    const fullPath = path.resolve(process.cwd(), args.path);
+    const mapped = resolveToolPath(args.path, context);
+    if (!mapped.ok) return mapped.reason;
+    const fullPath = mapped.hostPath;
     if (context?.securedMode !== false) {
-      const guard = guardPath(fullPath, process.cwd());
+      const guard = guardPath(fullPath, context?.execTarget?.hostRoot ?? process.cwd());
       if (guard) return guard;
     }
     const content = await readFile(fullPath, 'utf-8');

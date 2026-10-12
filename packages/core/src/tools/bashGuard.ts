@@ -323,7 +323,9 @@ export function guardPath(p: string, cwd: string): string | null {
   const abs = toAbsolutePath(p, path.resolve(cwd));
   if (!abs) return null; // bare relative name -> inside cwd
   const cwdAbs = path.resolve(cwd) + '/';
-  if (abs.startsWith(cwdAbs)) return null;
+  // The project root itself is inside the project (exact match has no
+  // trailing slash, so the prefix test alone would miss it).
+  if (abs === path.resolve(cwd) || abs.startsWith(cwdAbs)) return null;
   if (isSecret(abs)) {
     return `WORKSPACE BOUNDARY: this path is credentials/secrets and is never readable: ${p}`;
   }

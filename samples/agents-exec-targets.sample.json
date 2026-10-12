@@ -1,0 +1,47 @@
+[
+  {
+    "name": "local-default",
+    "model": "llama3.2:latest",
+    "description": "Local assistant — bash + file tools run on this machine (no exec block)",
+    "environment": {
+      "hostUrl": "http://localhost:11434",
+      "appBasePath": "/v1",
+      "insecure": true
+    },
+    "settings": { "permissionMode": "auto-edit" }
+  },
+  {
+    "name": "in-app",
+    "model": "qwen3-coder:latest",
+    "description": "Bash runs inside the container; file tools map /app -> this project dir",
+    "environment": {
+      "hostUrl": "http://localhost:11434",
+      "appBasePath": "/v1",
+      "insecure": true
+    },
+    "exec": {
+      "kind": "container",
+      "container": "claude-flows-app-1",
+      "root": "/app"
+    },
+    "settings": { "permissionMode": "auto-edit" }
+  },
+  {
+    "name": "on-server",
+    "model": "qwen3-coder:latest",
+    "description": "Bash runs over ssh; file tools map /srv/proj -> this project dir",
+    "environment": {
+      "hostUrl": "http://localhost:11434",
+      "appBasePath": "/v1",
+      "insecure": true
+    },
+    "exec": {
+      "kind": "remote",
+      "host": "buildbox",
+      "shell": "/bin/sh",
+      "root": "/srv/proj",
+      "hostRoot": "/home/sadai/projects/proj"
+    },
+    "settings": { "permissionMode": "auto-edit" }
+  }
+]
