@@ -1,4 +1,3 @@
-import { describe, it, expect } from 'vitest';
 import { sq, wrapBashCmd, mapPath } from '../tools/execTarget.js';
 
 describe('sq (single-quote wrap — sole new injection surface)', () => {
@@ -7,11 +6,11 @@ describe('sq (single-quote wrap — sole new injection surface)', () => {
   });
 
   it('neutralizes embedded single quotes (close, escape, reopen)', () => {
-    expect(sq("echo 'hi'")).toBe(`'echo '\''hi'\'''`);
+    expect(sq("echo 'hi'")).toBe(String.raw`'echo '\''hi'\'''`);
   });
 
   it('leaves $ expansions inert', () => {
-    expect(sq('echo $HOME ${X}')).toBe(`'echo $HOME ${X}'`);
+    expect(sq('echo $HOME ${X}')).toBe(`'echo $HOME \${X}'`);
   });
 
   it('leaves command separators ; && || | inert', () => {
@@ -41,7 +40,7 @@ describe('sq (single-quote wrap — sole new injection surface)', () => {
 
   it('wrapBashCmd embeds the sq-escaped command', () => {
     expect(wrapBashCmd({ kind: 'container', container: 'app-1' }, "echo 'hi'")).toBe(
-      `docker exec -i app-1 /bin/bash -c 'echo '\''hi'\'''`
+      String.raw`docker exec -i app-1 /bin/bash -c 'echo '\''hi'\'''`
     );
     expect(wrapBashCmd({ kind: 'remote', host: 'srv', shell: '/bin/sh' }, 'pwd')).toBe(
       `ssh srv /bin/sh -c 'pwd'`

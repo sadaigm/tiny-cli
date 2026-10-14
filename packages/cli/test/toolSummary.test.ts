@@ -158,7 +158,7 @@ describe('summarizeToolResult', () => {
       timestamp: 0,
     };
     const s = summarizeToolResult(entry, 100);
-    expect(s.header).toBe('↳ first line');
+    expect(s.header).toBe('first line'); // icon/arrow prefix is added by the renderer
     expect(s.hiddenLineCount).toBe(3);
     expect(s.detail).toContain('second line');
   });
@@ -166,7 +166,7 @@ describe('summarizeToolResult', () => {
   it('handles empty results', () => {
     const entry: LogEntry = { id: 'log-5', type: 'tool_result', content: '', timestamp: 0 };
     const s = summarizeToolResult(entry, 80);
-    expect(s.header).toBe('↳ ');
+    expect(s.header).toBe('');
     expect(s.hiddenLineCount).toBe(0);
   });
 });

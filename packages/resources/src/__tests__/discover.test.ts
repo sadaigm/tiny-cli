@@ -92,7 +92,9 @@ describe("loadSkills", () => {
     process.chdir(nested);
     const r = await loadSkills({ ...baseOpts, trusted: true });
     expect(r.skills.map((s) => s.name)).toContain("up-skill");
-    expect(r.skills.find((s) => s.name === "up-skill")?.path).toBe(skillPath);
+    // process.cwd() reports the physical path on macOS (/private/var/...),
+    // while os.tmpdir() returns the logical /var/... — normalize both sides.
+    expect(r.skills.find((s) => s.name === "up-skill")?.path).toBe(await fs.realpath(skillPath));
   });
 
   it("loads settings skills (files and dirs)", async () => {

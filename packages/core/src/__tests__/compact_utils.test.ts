@@ -99,7 +99,9 @@ describe('compact_utils', () => {
       const history = buildCompactedHistory(plan, 'the summary');
       expect(history).toEqual([
         { role: 'system', content: 'sys' },
-        { role: 'system', content: '[PREVIOUS CONTEXT SUMMARY]\nthe summary' },
+        // Summary is injected as a user message, not system — several
+        // OpenAI-compatible APIs reject mid-conversation system messages.
+        { role: 'user', content: '[PREVIOUS CONTEXT SUMMARY]\nthe summary' },
         { role: 'user', content: 'new' },
       ]);
     });

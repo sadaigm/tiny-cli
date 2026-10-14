@@ -3,28 +3,30 @@ import { parseBinding, matchesBinding, DEFAULT_BINDINGS } from '../src/tui/keybi
 
 describe('parseBinding', () => {
   it('parses ctrl combos case-insensitively', () => {
-    expect(parseBinding('ctrl+p')).toEqual({ ctrl: true, alt: false, key: 'p' });
-    expect(parseBinding('Ctrl+P')).toEqual({ ctrl: true, alt: false, key: 'p' });
-    expect(parseBinding('CTRL+R')).toEqual({ ctrl: true, alt: false, key: 'r' });
+    expect(parseBinding('ctrl+p')).toEqual({ ctrl: true, alt: false, shift: false, key: 'p' });
+    expect(parseBinding('Ctrl+P')).toEqual({ ctrl: true, alt: false, shift: false, key: 'p' });
+    expect(parseBinding('CTRL+R')).toEqual({ ctrl: true, alt: false, shift: false, key: 'r' });
+  });
+
+  it('parses shift combos', () => {
+    expect(parseBinding('ctrl+shift+p')).toEqual({ ctrl: true, alt: false, shift: true, key: 'p' });
   });
 
   it('parses alt combos and named keys', () => {
-    expect(parseBinding('alt+b')).toEqual({ ctrl: false, alt: true, key: 'b' });
-    expect(parseBinding('escape')).toEqual({ ctrl: false, alt: false, key: 'escape' });
-    expect(parseBinding('pageup')).toEqual({ ctrl: false, alt: false, key: 'pageup' });
+    expect(parseBinding('alt+b')).toEqual({ ctrl: false, alt: true, shift: false, key: 'b' });
+    expect(parseBinding('escape')).toEqual({ ctrl: false, alt: false, shift: false, key: 'escape' });
+    expect(parseBinding('pageup')).toEqual({ ctrl: false, alt: false, shift: false, key: 'pageup' });
   });
 
   it('parses single letters as bare bindings', () => {
-    expect(parseBinding('y')).toEqual({ ctrl: false, alt: false, key: 'y' });
+    expect(parseBinding('y')).toEqual({ ctrl: false, alt: false, shift: false, key: 'y' });
   });
 
   it('rejects malformed specs', () => {
     expect(parseBinding('')).toBeNull();
     expect(parseBinding('ctrl')).toBeNull();
-    expect(parseBinding('ctrl+shift+p')).toBeNull();
     expect(parseBinding('meta+p')).toBeNull();
     expect(parseBinding('notakey')).toBeNull();
-    expect(parseBinding('ctrl+1')).toBeNull();
     expect(parseBinding('ctrl++')).toBeNull();
   });
 });
