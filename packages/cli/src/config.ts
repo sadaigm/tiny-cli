@@ -9,7 +9,8 @@ const HOME_PROJECT_CONFIG_FILE = path.join(os.homedir(), '.tiny-cli', 'agents.js
 const DEFAULT_CONFIG: AgentConfig = {
   endpoint: 'http://localhost:11434/v1',
   model: 'llama3.2:latest',
-  temperature: 0.7
+  temperature: 0.7,
+  max_tokens: 16384
 };
 
 interface AgentProfile {
@@ -24,6 +25,8 @@ interface AgentProfile {
     plan?: string;
   };
   temperature?: number;
+  /** Per-response output token cap sent as max_tokens and announced to the agent in the system prompt. Defaults to 16384. */
+  maxTokens?: number;
   /** @deprecated Use settings.permissionMode — migrated on load. */
   permissionMode?: PermissionMode;
   /** Settings block shared with the GUI; single source of truth for permissionMode. */
@@ -167,6 +170,7 @@ export function profileToConfig(profile: AgentProfile, trusted: boolean, prefs?:
     endpoint: `${env?.hostUrl || 'http://localhost:11434'}${env?.appBasePath || '/v1'}`,
     model: prefs?.modelOverrides?.[profile.name] ?? profile.model,
     temperature: profile.temperature,
+    max_tokens: profile.maxTokens ?? 16384,
     systemPrompt: profile.systemPrompt,
     prompts: profile.prompts,
     apiKey: expandApiKey(env?.apiKey),

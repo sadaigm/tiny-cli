@@ -153,6 +153,14 @@ export class Agent {
       .replace("${process.cwd()}", process.cwd())
       .replace("${process.platform()}", process.platform);
 
+    // Announce the per-response output cap so the agent can plan around it:
+    // without knowing the limit it emits one oversized write/payload that gets
+    // cut off mid-generation (finish_reason=length) instead of splitting the
+    // work across multiple tool calls up front.
+    if (this.config.max_tokens) {
+      systemPrompt += `\n\nOutput limit: each of your responses is capped at ${this.config.max_tokens} tokens — this includes tool call arguments (e.g. a file's content in a write call) and any reply text. Anything longer is cut off mid-generation. Never emit a single response or tool call larger than this limit: split large files or payloads across multiple smaller tool calls.`;
+    }
+
     // Secured mode: advisory security rules (the tools enforce the boundary
     // themselves; this just tells the model the rules up front).
     if (this.config.securedMode !== false) {
@@ -356,9 +364,10 @@ GUIDANCE FOR PLAN EXECUTION:
       consecutiveModelErrors = 0;
       const modelChatMs = performance.now() - modelStart;
 
-      // Opt-in fallback: some small local models emit tool calls as text JSON
-      // instead of native tool_calls. Promote them to real tool calls so they
-      // execute; only active when settings.textToolCallFallback is true.
+      // Opt-in fallback: some small local models emit tool calls as text
+      // (JSON or pseudo-XML) instead of native tool_calls. Promote them to
+      // real tool calls so they execute; only active when
+      // settings.textToolCallFallback is true.
       if (
         this.config.textToolCallFallback === true &&
         (!response.tool_calls || response.tool_calls.length === 0) &&

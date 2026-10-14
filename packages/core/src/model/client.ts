@@ -66,6 +66,9 @@ export class ModelClient {
         function: { name: t.name, description: t.description, parameters: t.parameters }
       }));
     }
+    // Explicit cap: without it the server applies its own default (MLX: 2048),
+    // which truncates long responses mid-generation (finish_reason=length).
+    if (this.config.max_tokens) payload.max_tokens = this.config.max_tokens;
 
     const cMessages = payload.messages.filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system');
     logTrace(`chat() — sending request to ${this.config.endpoint}/chat/completions, model=${this.config.model}, thinking=${this.config.thinkingLevel ?? 'off'}, messages=${cMessages.length}, tools=${payload.tools?.length ?? 0}`);
@@ -131,6 +134,9 @@ export class ModelClient {
         function: { name: t.name, description: t.description, parameters: t.parameters }
       }));
     }
+    // See chat(): without an explicit cap the server default (MLX: 2048)
+    // truncates long responses mid-generation.
+    if (this.config.max_tokens) payload.max_tokens = this.config.max_tokens;
 
     const callStart = Date.now();
     logInfo(`chatStreamed() — POST ${this.config.endpoint}/chat/completions, model=${this.config.model}, thinking=${this.config.thinkingLevel ?? 'off'}, messages=${messages.length}, tools=${payload.tools?.length ?? 0}, timeoutMs=${this.timeoutMs}`);
@@ -193,6 +199,7 @@ export class ModelClient {
 
     const decoder = new TextDecoder();
     let buffer = '';
+    let finishReason: string | null = null;
     try {
       for await (const chunk of response.body) {
         buffer += decoder.decode(chunk as Uint8Array, { stream: true });
@@ -208,6 +215,7 @@ export class ModelClient {
           }
           const choice = delta.choices?.[0];
           if (!choice) continue;
+          if (choice.finish_reason) finishReason = choice.finish_reason;
           const piece = choice.delta?.content;
           if (piece) {
             content += piece;
@@ -251,7 +259,16 @@ export class ModelClient {
       throw err;
     }
 
-    logInfo(`chatStreamed() — done in ${Date.now() - callStart}ms, content=${content.length} chars, tool_calls=${toolCalls.length}`);
+    logInfo(`chatStreamed() — done in ${Date.now() - callStart}ms, content=${content.length} chars, tool_calls=${toolCalls.length}, finish_reason=${finishReason ?? '?'}`);
+
+    // Diagnostic capture: a response with text but no native tool_calls is
+    // where leaked text-format tool calls (local-model drift) hide. Dump the
+    // raw content verbatim to tui.log for post-hoc debugging. LOG level so it
+    // always reaches the file; the TUI sink swallows non-ERROR lines, so this
+    // never floods the message log.
+    if (toolCalls.length === 0 && content) {
+      logInfo(`[raw-response] no tool_calls; full content <<<CONTENT\n${content}\nCONTENT>>>`);
+    }
 
     return {
       content,

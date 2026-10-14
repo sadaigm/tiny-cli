@@ -51,6 +51,8 @@ export interface AgentConfig {
   apiKey?: string;
   model: string;
   temperature?: number;
+  /** Per-response output token cap sent as max_tokens; also announced to the agent in the system prompt. */
+  max_tokens?: number;
   systemPrompt?: string;
   /** Per-mode system-prompt overrides; unset modes fall back to the built-in prompts. */
   prompts?: {
