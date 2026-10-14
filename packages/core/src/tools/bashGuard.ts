@@ -132,7 +132,12 @@ function block(key: string, detail: string): BashBoundaryResult {
 
 function isSecret(p: string): boolean {
   const lower = p.toLowerCase();
-  return SECRET_PATTERNS.some((s) => lower.includes(s));
+  return SECRET_PATTERNS.some((s) => {
+    if (lower.includes(s)) return true;
+    // Directory patterns must also match the bare dir itself — `~/.aws`
+    // resolves without a trailing slash, so '.aws/' alone would miss it.
+    return s.endsWith('/') && lower.endsWith(s.slice(0, -1));
+  });
 }
 
 function isGitIdentity(p: string, cmdLower: string): boolean {
@@ -275,7 +280,8 @@ export async function checkBashBoundary(
       return {
         key: 'scratch-redirect',
         message: [
-          `WORKSPACE BOUNDARY: only the project scratch directory is allowed, not all of /tmp.`,
+          `WORKSPACE BOUNDARY: command NOT executed.`,
+          `Only the project scratch directory is allowed, not all of /tmp.`,
           `Re-issue the command using: ${scratchRoot}`,
         ].join('\n'),
       };
