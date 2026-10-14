@@ -40,6 +40,9 @@ export function wrappedLineCount(text: string, usable: number): number {
  * - system / info / error: treated like a wrapped body line.
  */
 export function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number, inTurn = false): number {
+  // Defensive: a malformed entry (null/undefined, or missing `type`/`content`)
+  // must not crash the whole pane — count it as a single line and move on.
+  if (!entry || typeof entry.type !== 'string' || typeof entry.content !== 'string') return 1;
   const usable = Math.max(1, columns - BODY_INDENT);
   if (entry.type === 'tool_call' || entry.type === 'tool_result') {
     if (!expanded.has(entry.id)) return 1;
@@ -86,6 +89,8 @@ export function estimateLines(entry: LogEntry, columns: number, expanded: Set<st
  * entry instead of moving to its neighbours.
  */
 export function renderedBodyLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning: boolean): number {
+  // Defensive: a malformed entry must not crash the pane — count no body.
+  if (!entry || typeof entry.type !== 'string' || typeof entry.content !== 'string') return 0;
   const usable = Math.max(1, columns - BODY_INDENT);
   if (entry.type === 'tool_call' || entry.type === 'tool_result') {
     if (!expanded.has(entry.id)) return 0;

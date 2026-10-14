@@ -33,11 +33,13 @@ export function groupEntries(entries: LogEntry[]): RenderGroup[] {
   const groups: RenderGroup[] = [];
   let i = 0;
   while (i < entries.length) {
-    if (entries[i].type === 'user') {
+    // Defensive: a malformed entry (null/undefined) must not crash grouping.
+    const type = entries[i]?.type;
+    if (type === 'user') {
       groups.push({ start: i, end: i + 1, turn: false });
       i++;
       const start = i;
-      while (i < entries.length && entries[i].type !== 'user') i++;
+      while (i < entries.length && entries[i]?.type !== 'user') i++;
       if (i > start) groups.push({ start, end: i, turn: true });
     } else {
       // Entries before any user message (session hydration, banners).
