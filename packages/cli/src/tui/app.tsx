@@ -8,6 +8,7 @@ import React, {
 import { Box, Text, useApp, useInput, useStdout } from "./compat.js";
 import { logTrace, logInfo, logError, SessionManager } from "@tiny-cli/core";
 import type { Agent, Session, AgentConfig } from "@tiny-cli/core";
+import { rehydrateSessionImages } from "../file-mention.js";
 
 import type {
   TuiState,
@@ -228,6 +229,7 @@ export default function App({
     sessionId,
     stateRef,
     paneRef,
+    agent,
     agentApi,
     handleSlashCommand,
   });
@@ -293,7 +295,9 @@ export default function App({
           const newSession = await sessionManager.loadSession(chosen);
           if (newSession) {
             agent.setSessionId(chosen);
-            agent.setHistory(newSession.messages);
+            // Persisted sessions store image paths only — re-read the files
+            // so vision context survives the reload.
+            agent.setHistory(await rehydrateSessionImages(newSession.messages));
             await applySessionProfile(agent, newSession.metadata, (cfg) =>
               dispatch({ type: "SET_CONFIG", config: cfg })
             );

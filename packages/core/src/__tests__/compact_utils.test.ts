@@ -1,6 +1,7 @@
 import {
   CompactionPlan,
   DEFAULT_COMPACT_THRESHOLD,
+  IMAGE_ATTACHMENT_TOKENS,
   measureContext,
   needsCompaction,
   planCompaction,
@@ -23,6 +24,19 @@ describe('compact_utils', () => {
       const stats = measureContext(msgs);
       expect(stats.tokens).toBeGreaterThan(0);
       expect(stats.characters).toBe('hello world'.length + 'hi'.length + JSON.stringify(msgs[1].tool_calls).length);
+    });
+
+    it('counts each attached image as a flat token cost, not its base64 chars', () => {
+      const base64 = 'A'.repeat(10_000); // must NOT be counted char-wise
+      const withImages: Message[] = [
+        { role: 'user', content: 'look', images: [{ path: 'a.png', mimeType: 'image/png', data: base64 }, { path: 'b.png', mimeType: 'image/png', data: base64 }] },
+      ];
+      const without: Message[] = [{ role: 'user', content: 'look' }];
+
+      const statsWith = measureContext(withImages);
+      const statsWithout = measureContext(without);
+      expect(statsWith.tokens - statsWithout.tokens).toBe(2 * IMAGE_ATTACHMENT_TOKENS);
+      expect(statsWith.characters).toBe(statsWithout.characters); // base64 adds no chars
     });
   });
 

@@ -11,12 +11,23 @@ export interface ToolCall {
   };
 }
 
+/** An image attached to a user message via @mention. `data` is raw base64
+ * (no data-url prefix) in the live history; persisted sessions store only
+ * `{ path, mimeType }` and re-read the file on load. */
+export interface ImageAttachment {
+  path: string;      // workspace-relative, as mentioned
+  mimeType: string;  // image/png | image/jpeg | image/gif | image/webp
+  data?: string;     // base64; absent in persisted sessions until re-read
+}
+
 export interface Message {
   role: MessageRole;
   content: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** Images attached to this user message; sent as image_url content parts. */
+  images?: ImageAttachment[];
 }
 
 export interface ModelOptions {
@@ -92,6 +103,8 @@ export interface AgentConfig {
   profileName?: string;
   /** Execution target for the bash tool (docker container / ssh host); unset = local execution. */
   execTarget?: ExecTarget;
+  /** Model accepts image input; when unset/false, @image mentions hydrate to a skip note. Defaults to false. */
+  vision?: boolean;
 }
 
 export interface ToolDefinition {

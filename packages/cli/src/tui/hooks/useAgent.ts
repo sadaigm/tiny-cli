@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import type { Agent, AskUserResponse } from '@tiny-cli/core';
+import type { Agent, AskUserResponse, ImageAttachment } from '@tiny-cli/core';
 import { logError, logDebug } from '@tiny-cli/core';
 import { MessageQueue } from '../utils/messageQueue.js';
 import { createDeferred, type Deferred } from '../utils/deferred.js';
@@ -14,6 +14,7 @@ import { createSaveSession, wireAgentEvents } from './sessionSync.js';
 import { createApprovals } from './approvals.js';
 import { createRunTurn } from './runTurn.js';
 import { createPlanExecution } from './planExecution.js';
+import { createBangCommand } from './bangCommand.js';
 
 export type {
   NewLogEntry,
@@ -196,7 +197,7 @@ export function useAgent({
    *   current turn drains the queue.
    */
   const submitMessage = useCallback(
-    (text: string, displayText?: string): void => {
+    (text: string, displayText?: string, images?: ImageAttachment[]): void => {
       const trimmed = text.trim();
       if (!trimmed) return;
       // What the user saw in the input (e.g. "@path" mentions, not the
@@ -205,7 +206,7 @@ export function useAgent({
 
       if (isRunningRef.current) {
         // Agent is busy — queue the message
-        queueRef.current.enqueue(trimmed);
+        queueRef.current.enqueue(trimmed, images);
         setState({ messageQueue: queueRef.current.toArray() });
         addLog({
           type: 'user',
@@ -219,10 +220,18 @@ export function useAgent({
           content: display,
         });
         // Fire-and-forget: do NOT await — keeps render cycle non-blocking
-        runAgentTurn(trimmed).catch((e) => logDebug(`[trace] runAgentTurn (submit) unhandled: name=${(e as Error)?.name} message=${(e as Error)?.message}`));
+        runAgentTurn(trimmed, undefined, images).catch((e) => logDebug(`[trace] runAgentTurn (submit) unhandled: name=${(e as Error)?.name} message=${(e as Error)?.message}`));
       }
     },
     [addLog, setState, runAgentTurn],
+  );
+
+  // Bang-mode (`! command`) runner — executes the shell command, then hands
+  // command + output to the agent (see bangCommand.ts). Defined after
+  // submitMessage: it is a dependency.
+  const runBangCommand = useMemo(
+    () => createBangCommand({ agent, addLog, submitMessage }),
+    [agent, addLog, submitMessage],
   );
 
   /**
@@ -262,6 +271,7 @@ export function useAgent({
 
   return {
     submitMessage,
+    runBangCommand,
     abortCurrentRun,
     clearQueue,
     resolveApproval,

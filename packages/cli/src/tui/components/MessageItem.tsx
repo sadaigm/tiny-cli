@@ -67,6 +67,7 @@ const ICONS: Record<LogEntryType, string> = {
   tool_call: '⎿',
   tool_result: '└',
   system: '·',
+  shell: '$',
   plan: '▶',
   error: '✖',
   info: '·',
@@ -150,6 +151,7 @@ function entryColors(): Record<LogEntryType, string> {
     tool_call: theme.toolCall,
     tool_result: theme.toolResult,
     system: theme.system,
+    shell: theme.toolResult,
     plan: theme.accent,
     error: theme.error,
     info: theme.system,
@@ -359,7 +361,7 @@ export default function MessageItem({
   // Plan banners stay theme-accented in the body (not dimmed gray) so the
   // current task is always visually distinct while a plan executes.
   const bodyColor =
-    entry.type === 'error' ? 'red' : entry.type === 'system' || entry.type === 'info' ? 'gray' : entry.type === 'plan' ? color : undefined;
+    entry.type === 'error' ? 'red' : entry.type === 'system' || entry.type === 'info' || entry.type === 'shell' ? 'gray' : entry.type === 'plan' ? color : undefined;
 
   // Markdown bodies (user/assistant): layout happens in the pure util —
   // clipping is a line-array slice (lineOffset/maxLines index MdLines), so
@@ -418,7 +420,7 @@ export default function MessageItem({
   const fullLines = fullBody.split('\n');
   let body = clip(fullBody);
   let hiddenHint = '';
-  const cappedType = entry.type === 'system' || entry.type === 'info' || entry.type === 'error';
+  const cappedType = entry.type === 'system' || entry.type === 'info' || entry.type === 'error' || entry.type === 'shell';
   if (cappedType && !expanded && fullLines.length > MAX_STANDARD_BODY_LINES) {
     body = fullLines.slice(0, MAX_STANDARD_BODY_LINES).join('\n');
     hiddenHint = `  ⤤ +${fullLines.length - MAX_STANDARD_BODY_LINES} lines`;

@@ -28,6 +28,50 @@ export class ModelClient {
     return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
   }
 
+  /**
+   * Map internal messages onto the /chat/completions wire format. A user
+   * message carrying images becomes a content-parts array (text part +
+   * one image_url part per attachment, as an object-form data URL — the
+   * official OpenAI shape accepted by every vision-capable compatible
+   * server); anything else passes through unchanged, so text-only
+   * conversations keep the plain-string content they always had.
+   */
+  private toApiMessages(messages: Message[]): any[] {
+    return messages.map((m) => {
+      const images = m.images?.filter((i) => i.data);
+      if (m.role !== 'user' || !images || images.length === 0) return m;
+      const wire: any = {
+        ...m,
+        content: [
+          { type: 'text', text: m.content },
+          ...images.map((i) => ({
+            type: 'image_url',
+            image_url: { url: `data:${i.mimeType};base64,${i.data}` },
+          })),
+        ],
+      };
+      delete wire.images; // attachments ride as content parts, not a stray field
+      return wire;
+    });
+  }
+
+  /**
+   * JSON view of an outgoing payload for tui.log, with oversized strings
+   * (base64 image data URLs especially) elided to a prefix + length — a
+   * single 5 MB attachment is ~6.8M base64 chars, and history images are
+   * re-sent every turn, which would otherwise flood the log.
+   */
+  private describePayload(payload: any): string {
+    const elide = (s: string) =>
+      s.length > 120 ? `${s.slice(0, 80)}…(+${s.length - 80} chars)` : s;
+    const walk = (v: any): any =>
+      typeof v === 'string' ? elide(v)
+        : Array.isArray(v) ? v.map(walk)
+          : v && typeof v === 'object'
+            ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))
+            : v;
+    return JSON.stringify(walk(payload));
+  }
 
   async chat(
     messages: Message[],
@@ -55,7 +99,7 @@ export class ModelClient {
 
     const payload: any = {
       model: this.config.model,
-      messages,
+      messages: this.toApiMessages(messages),
       temperature: this.config.temperature ?? 0.2,
     };
     applyThinking(payload, this.config);
@@ -72,6 +116,7 @@ export class ModelClient {
 
     const cMessages = payload.messages.filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system');
     logTrace(`chat() — sending request to ${this.config.endpoint}/chat/completions, model=${this.config.model}, thinking=${this.config.thinkingLevel ?? 'off'}, messages=${cMessages.length}, tools=${payload.tools?.length ?? 0}`);
+    logDebug(`chat() — outgoing payload: ${this.describePayload(payload)}`);
 
     const fetchStart = Date.now();
     let response;
@@ -123,7 +168,7 @@ export class ModelClient {
   ): Promise<ModelResponse> {
     const payload: any = {
       model: this.config.model,
-      messages,
+      messages: this.toApiMessages(messages),
       temperature: this.config.temperature ?? 0.2,
       stream: true,
     };
@@ -140,6 +185,7 @@ export class ModelClient {
 
     const callStart = Date.now();
     logInfo(`chatStreamed() — POST ${this.config.endpoint}/chat/completions, model=${this.config.model}, thinking=${this.config.thinkingLevel ?? 'off'}, messages=${messages.length}, tools=${payload.tools?.length ?? 0}, timeoutMs=${this.timeoutMs}`);
+    logDebug(`chatStreamed() — outgoing payload: ${this.describePayload(payload)}`);
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -285,11 +331,12 @@ export class ModelClient {
   async *stream(messages: Message[], signal?: AbortSignal): AsyncGenerator<string> {
     const payload: any = {
       model: this.config.model,
-      messages,
+      messages: this.toApiMessages(messages),
       temperature: this.config.temperature ?? 0.2,
       stream: true
     };
     applyThinking(payload, this.config);
+    logDebug(`stream() — outgoing payload: ${this.describePayload(payload)}`);
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {

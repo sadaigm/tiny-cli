@@ -1,13 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { MessageQueue } from '../src/tui/utils/messageQueue.js';
+import type { ImageAttachment } from '@tiny-cli/core';
 
 /**
  * Unit tests for the FIFO MessageQueue.
  *
  * This queue is the backbone of the "type while the agent is working"
  * feature: when the user submits a prompt mid-turn, it is enqueued here
- * and drained in order after each turn completes. These tests pin down
- * its contract so the queuing behaviour cannot silently regress.
+ * and drained in order after each agent turn completes. These tests pin
+ * down its contract so the queuing behaviour cannot silently regress.
  */
 describe('MessageQueue', () => {
   it('processes messages in FIFO order (the core requirement)', () => {
@@ -16,9 +17,9 @@ describe('MessageQueue', () => {
     q.enqueue('second');
     q.enqueue('third');
 
-    expect(q.dequeue()).toBe('first');
-    expect(q.dequeue()).toBe('second');
-    expect(q.dequeue()).toBe('third');
+    expect(q.dequeue()).toEqual({ text: 'first' });
+    expect(q.dequeue()).toEqual({ text: 'second' });
+    expect(q.dequeue()).toEqual({ text: 'third' });
     // After draining everything, the queue is empty.
     expect(q.dequeue()).toBeNull();
   });
@@ -35,7 +36,26 @@ describe('MessageQueue', () => {
   it('trims surrounding whitespace when enqueuing', () => {
     const q = new MessageQueue();
     q.enqueue('  hello world  ');
-    expect(q.dequeue()).toBe('hello world');
+    expect(q.dequeue()).toEqual({ text: 'hello world' });
+  });
+
+  it('carries image attachments through the queue with their text', () => {
+    const q = new MessageQueue();
+    const images: ImageAttachment[] = [
+      { path: 'a.png', mimeType: 'image/png', data: 'AAAA' },
+    ];
+    q.enqueue('look at this', images);
+    q.enqueue('text only');
+
+    expect(q.dequeue()).toEqual({ text: 'look at this', images });
+    expect(q.dequeue()).toEqual({ text: 'text only' });
+  });
+
+  it('omits the images field when enqueueing without attachments', () => {
+    const q = new MessageQueue();
+    q.enqueue('plain');
+    // No empty `images: []` key — queued items stay plain messages.
+    expect(q.dequeue()).toEqual({ text: 'plain' });
   });
 
   it('reports correct length and isEmpty state', () => {
@@ -60,9 +80,9 @@ describe('MessageQueue', () => {
 
     q.enqueue('first');
     q.enqueue('second');
-    expect(q.peek()).toBe('first');
+    expect(q.peek()).toEqual({ text: 'first' });
     // peek does not mutate.
-    expect(q.peek()).toBe('first');
+    expect(q.peek()).toEqual({ text: 'first' });
     expect(q.length).toBe(2);
   });
 
@@ -81,7 +101,7 @@ describe('MessageQueue', () => {
     expect(q.peek()).toBeNull();
   });
 
-  it('toArray() returns a shallow copy in order and does not mutate the queue', () => {
+  it('toArray() returns the message texts in order and does not mutate the queue', () => {
     const q = new MessageQueue();
     q.enqueue('one');
     q.enqueue('two');
@@ -96,10 +116,10 @@ describe('MessageQueue', () => {
     expect(q.toArray()).toEqual(['one', 'two', 'three']);
   });
 
-  it('simulates a full drain cycle as useAgent performs it', () => {
-    // Mirror the real usage in useAgent.runAgentTurn():
+  it('simulates a full drain cycle as runTurn performs it', () => {
+    // Mirror the real usage in runAgentTurn():
     //   const next = queue.dequeue();
-    //   if (next) { runTurn(next); ... }
+    //   if (next) { runTurn(next.text, next.images); ... }
     const q = new MessageQueue();
     q.enqueue('queued-while-busy-1');
     q.enqueue('queued-while-busy-2');
@@ -107,7 +127,7 @@ describe('MessageQueue', () => {
     const drained: string[] = [];
     let next = q.dequeue();
     while (next !== null) {
-      drained.push(next);
+      drained.push(next.text);
       next = q.dequeue();
     }
 

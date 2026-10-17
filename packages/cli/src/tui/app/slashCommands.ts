@@ -11,6 +11,7 @@ import { SLASH_COMMANDS } from '../utils/commands.js';
 import { findInLog } from '../utils/logSearch.js';
 import { relativeTime, applySessionProfile } from './sessionLoad.js';
 import { runSkillCommand, listSkillsCommand, createSkillCommand } from './skills.js';
+import { rehydrateSessionImages } from '../../file-mention.js';
 
 const HELP_KEY_LINES: string[] = [
   'Enter        submit · Shift+Enter newline · ↑/↓ recall input history',
@@ -382,7 +383,9 @@ export function createSlashCommands({
             const newSession = await sessionManager.loadSession(id);
             if (newSession) {
               agent.setSessionId(id);
-              agent.setHistory(newSession.messages);
+              // Persisted sessions store image paths only — re-read the files
+              // so vision context survives the reload.
+              agent.setHistory(await rehydrateSessionImages(newSession.messages));
               await applySessionProfile(agent, newSession.metadata, (cfg) =>
                 dispatch({ type: 'SET_CONFIG', config: cfg })
               );

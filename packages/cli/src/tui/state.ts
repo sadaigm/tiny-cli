@@ -15,6 +15,7 @@ export type LogEntryType =
   | 'tool_call'
   | 'tool_result'
   | 'system'
+  | 'shell'
   | 'plan'
   | 'error'
   | 'info';

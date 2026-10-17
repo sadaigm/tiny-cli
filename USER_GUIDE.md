@@ -250,6 +250,22 @@ Role reference:
 
 ---
 
+## Shell Escape (`!`)
+
+Type `! <command>` to run a shell command directly, without involving the model — vim-style bang mode.
+
+- **Runs where the bash tool runs**: with no `exec` target configured, the command runs locally; container/remote profiles run it inside the target (`docker exec` / `ssh`), exactly like the agent's own `bash` calls.
+- **The agent responds**: once the command finishes, its command + output go to the agent as your next message, and the agent reacts to what happened. If a turn is already running, the bang message queues like any other.
+- **Errors are handled**: a non-zero exit adds an `[exit N]` line and explicitly asks the agent to diagnose and fix the failure.
+- `@`-file mentions are **not** hydrated inside bang lines; everything after `!` goes to the shell verbatim.
+- `!` lines are recalled with `↑` like any other input.
+
+```
+! git status
+```
+
+Bare `!` prints a usage hint. Commands also run while an agent turn is in flight — the output shows immediately and the message queues for the agent's next turn.
+
 ## File Mentions (`@`)
 
 Type **`@`** anywhere in your prompt to trigger the file-mention picker. This lets you inject file contents directly into the agent's context.
@@ -261,6 +277,45 @@ Type **`@`** anywhere in your prompt to trigger the file-mention picker. This le
 4. The full contents of each selected file are read and included as context when you send the prompt.
 
 This is essential when you want the agent to "see" a specific file without manually pasting its contents.
+
+### Image Mentions
+
+Mentioning an image file (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) sends the actual image to the model instead of its (binary) text contents — so a vision-capable model can see screenshots, diagrams, and photos.
+
+**Setup:** set `"vision": true` on the profile in `agents.json`:
+
+```json
+[
+  {
+    "name": "vlm",
+    "model": "qwen2.5vl:latest",
+    "vision": true,
+    "environment": { "hostUrl": "http://localhost:8080", "appBasePath": "/v1" }
+  }
+]
+```
+
+Then mention images like any other file: `what's wrong with this UI? [@screenshot.png]`. The log shows a `📎 screenshot.png` placeholder — the base64 payload is never rendered in the TUI.
+
+**Behavior:**
+
+| Situation | Result |
+|:---|:---|
+| `vision: true`, readable image ≤ 5 MB | Attached and sent to the model |
+| `vision` unset/`false` | Skipped with a note: `[image @path skipped — model has no vision]` |
+| Image larger than 5 MB | Skipped with a too-large note |
+| Image unreadable/missing | Degrades to a missing note; the turn continues |
+
+**Notes:**
+- Text and image mentions can be mixed freely in one prompt.
+- Each attached image counts as a flat ~800 tokens toward the context/compaction estimate.
+
+**Sessions & resume:**
+- Sessions store image **paths**, not the encoded data (session files stay small). Resuming a session — `--resume <id>`, `/session load`, or the session picker — re-reads the images from disk and re-attaches them to the conversation, so the model sees the same images again, in the same places.
+- The stored path is a **pointer, not a snapshot**: an image edited between sessions sends its *current* contents.
+- A missing or unreadable file degrades to an `[image @path missing]` note; the conversation continues.
+- Resume from the **same working directory** — paths are workspace-relative.
+- Replay is not gated on `vision`: a resumed session re-sends its images even if the active profile has `vision` off. Only *new* mentions are gated.
 
 ---
 
@@ -388,6 +443,7 @@ If neither exists, `tiny-cli` auto-creates a default config at `~/.tiny-cli/agen
 | `temperature` | Sampling temperature (0.0–1.0) | `0.7` |
 | `systemPrompt` | Override the built-in system prompt | Built-in default |
 | `permissionMode` | `notify`, `auto-edit`, or `auto` | `notify` |
+| `vision` | Model accepts image input; `@image` mentions are sent to it (see [Image Mentions](#image-mentions)) | `false` |
 | `logLevel` | `TRACE`, `DEBUG`, `LOG`, or `ERROR` | `LOG` |
 | `maxIterations` | Max agent loop iterations per query | Unlimited |
 | `environment.hostUrl` | Model API host URL | `http://localhost:11434` |

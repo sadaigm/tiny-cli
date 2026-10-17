@@ -1,4 +1,4 @@
-import type { Agent, AgentStep, ToolCall, SessionManager, AskUserPayload, AskUserResponse } from '@tiny-cli/core';
+import type { Agent, AgentStep, ToolCall, SessionManager, AskUserPayload, AskUserResponse, ImageAttachment } from '@tiny-cli/core';
 import { logError, logDebug } from '@tiny-cli/core';
 import type { StreamStore } from '../streamStore.js';
 import { createDeferred } from '../utils/deferred.js';
@@ -26,7 +26,7 @@ import type { TuiMode as Mode } from '../state.js';
  *
  * Errors are caught, logged, and the agent returns to idle.
  */
-export type RunAgentTurnFn = (input: string, spinnerPrefix?: string) => Promise<void>;
+export type RunAgentTurnFn = (input: string, spinnerPrefix?: string, images?: ImageAttachment[]) => Promise<void>;
 
 export function createRunTurn(deps: {
   agent: Agent;
@@ -57,7 +57,7 @@ export function createRunTurn(deps: {
     saveSession,
   } = deps;
 
-  const runAgentTurn = async (input: string, spinnerPrefix?: string): Promise<void> => {
+  const runAgentTurn = async (input: string, spinnerPrefix?: string, images?: ImageAttachment[]): Promise<void> => {
     logDebug(`[trace] runAgentTurn enter: mode=${refs.planExecutingRef.current ? 'agent(plan-exec)' : getMode()}, input="${input.slice(0, 60)}…"`);
     const turnStartedAt = Date.now();
     refs.isRunningRef.current = true;
@@ -177,6 +177,7 @@ export function createRunTurn(deps: {
         onText,
         onReasoning,
         showQuestionnaire,
+        images,
       );
       logDebug(`[trace] runAgentTurn: agent.run() resolved (content=${response.content?.length ?? 0} chars)`);
 
@@ -220,10 +221,10 @@ export function createRunTurn(deps: {
         // Log the de-queued message (no longer "queued" tag)
         addLog({
           type: 'user',
-          content: nextMessage,
+          content: nextMessage.text,
         });
         // Recurse to run the next turn
-        await runAgentTurn(nextMessage, spinnerPrefix);
+        await runAgentTurn(nextMessage.text, spinnerPrefix, nextMessage.images);
       } else {
         refs.isRunningRef.current = false;
         setState({

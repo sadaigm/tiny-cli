@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import fuzzy from 'fuzzy';
+import type { ImageAttachment, Message } from '@tiny-cli/core';
 
 const DEFAULT_EXCLUDE_LIST = [
   'node_modules', '.turbo', 'dist', 'build', 'out', '.git',
@@ -73,32 +74,128 @@ export function searchFiles(index: string[], query: string): string[] {
   return results.map(el => el.original).slice(0, 25);
 }
 
+/** Image extensions attachable via @mention, with their wire mime types. */
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+/** True when a mention target is an image file (by extension). */
+export function isImagePath(filePath: string): boolean {
+  return path.extname(filePath).toLowerCase() in IMAGE_MIME_TYPES;
+}
+
+/** Hard cap on a single attached image — larger files are skipped with a note. */
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+export interface HydratedMessage {
+  text: string;
+  images: ImageAttachment[];
+}
+
 /**
  * Hydrates a message by replacing [@path] tokens with actual file contents.
+ *
+ * Text files are inlined as `<file>` blocks (as always); image mentions
+ * become `ImageAttachment`s (base64) when the active model has vision —
+ * their token in the text turns into `[image: path]`. Without vision (or
+ * when the file is too large / unreadable) the image degrades to an
+ * explicit skip note instead of binary garbage.
  */
-export async function hydrateMessage(message: string): Promise<string> {
+export async function hydrateMessage(
+  message: string,
+  opts: { vision?: boolean } = {},
+): Promise<HydratedMessage> {
   const mentionRegex = /\[@([^\]]+)\]/g;
   let hydratedContent = '';
+  let text = message;
+  const images: ImageAttachment[] = [];
   const matches = [...message.matchAll(mentionRegex)];
-  
-  if (matches.length === 0) return message;
+
+  if (matches.length === 0) return { text: message, images };
 
   const filesProcessed = new Set<string>();
 
   for (const match of matches) {
     const filePath = match[1];
     if (filesProcessed.has(filePath)) continue;
+    filesProcessed.add(filePath);
+
+    if (isImagePath(filePath)) {
+      if (!opts.vision) {
+        hydratedContent += `[image @${filePath} skipped — model has no vision]\n`;
+        continue;
+      }
+      try {
+        const fullPath = path.resolve(process.cwd(), filePath);
+        const stat = await fs.stat(fullPath);
+        if (stat.size > MAX_IMAGE_BYTES) {
+          hydratedContent += `[image @${filePath} skipped — file too large (>5 MB)]\n`;
+          continue;
+        }
+        const data = await fs.readFile(fullPath);
+        images.push({
+          path: filePath,
+          mimeType: IMAGE_MIME_TYPES[path.extname(filePath).toLowerCase()],
+          data: data.toString('base64'),
+        });
+        text = text.replaceAll(`[@${filePath}]`, `[image: ${filePath}]`);
+        console.log(`[Hydration] Attaching image ${filePath} (${stat.size} bytes)`);
+      } catch (err) {
+        console.warn(`[Hydration] Warning: Could not read image @${filePath}`);
+        hydratedContent += `[image @${filePath} missing — unreadable]\n`;
+      }
+      continue;
+    }
 
     try {
       const fullPath = path.resolve(process.cwd(), filePath);
       const content = await fs.readFile(fullPath, 'utf-8');
       console.log(`[Hydration] Injecting ${filePath} (${content.length} chars)`);
       hydratedContent += `<file path="${filePath}">\n${content}\n</file>\n\n`;
-      filesProcessed.add(filePath);
     } catch (err) {
       console.warn(`[Hydration] Warning: Could not read file @${filePath}`);
     }
   }
 
-  return hydratedContent + message;
+  return { text: hydratedContent + text, images };
+}
+
+/**
+ * Rebuild image attachments for a loaded session: persisted messages carry
+ * path-only attachments (no base64, keeping session files small); re-read
+ * each file from disk. A missing file drops the attachment and leaves an
+ * explicit note in the text.
+ */
+export async function rehydrateSessionImages(messages: Message[]): Promise<Message[]> {
+  const out: Message[] = [];
+  for (const m of messages) {
+    if (!m.images || m.images.length === 0) {
+      out.push(m);
+      continue;
+    }
+    const images: ImageAttachment[] = [];
+    const missing: string[] = [];
+    for (const img of m.images) {
+      if (img.data) {
+        images.push(img);
+        continue;
+      }
+      try {
+        const buf = await fs.readFile(path.resolve(process.cwd(), img.path));
+        images.push({ ...img, data: buf.toString('base64') });
+      } catch {
+        missing.push(img.path);
+      }
+    }
+    const notes = missing.map((p) => `\n[image @${p} missing]`).join('');
+    const next: Message = { ...m, content: m.content + notes };
+    if (images.length > 0) next.images = images;
+    else delete next.images;
+    out.push(next);
+  }
+  return out;
 }

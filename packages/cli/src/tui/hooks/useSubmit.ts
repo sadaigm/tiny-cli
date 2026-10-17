@@ -1,6 +1,7 @@
 import { useCallback, type RefObject } from "react";
 
-import { hydrateMessage } from "../../file-mention.js";
+import type { Agent } from "@tiny-cli/core";
+import { hydrateMessage, isImagePath } from "../../file-mention.js";
 import { readPlanTaskFile, parseIncompleteTasks } from "../utils/planReader.js";
 import type { MessageLogHandle } from "../components/MessageLog.js";
 import type { UseAgentApi } from "./useAgent.js";
@@ -31,6 +32,7 @@ export interface UseSubmitProps {
   sessionId: string;
   stateRef: StateRef;
   paneRef: RefObject<MessageLogHandle | null>;
+  agent: Agent;
   agentApi: UseAgentApi;
   handleSlashCommand: (text: string) => Promise<unknown>;
 }
@@ -47,6 +49,7 @@ export function useSubmit({
   sessionId,
   stateRef,
   paneRef,
+  agent,
   agentApi,
   handleSlashCommand,
 }: UseSubmitProps) {
@@ -55,6 +58,13 @@ export function useSubmit({
       // Slash command?
       if (text.startsWith("/")) {
         await handleSlashCommand(text);
+        return;
+      }
+
+      // Shell escape? Runs via the active exec target; output lands in the
+      // transcript and model history, but no model turn starts.
+      if (text.startsWith("!")) {
+        await agentApi.runBangCommand(text);
         return;
       }
 
@@ -89,17 +99,23 @@ export function useSubmit({
       paneRef.current?.focusBottom();
 
       // Hydrate @file mentions then submit. The hydrated text (with
-      // <file> blocks) goes to the model; the original text (with @path
-      // mentions) is what gets displayed in the log.
-      const display = text.replace(/\[@([^\]]+)\]/g, "@$1");
+      // <file> blocks / [image: path] markers) goes to the model; the
+      // original text (with @path mentions, 📎 for images) is what gets
+      // displayed in the log — base64 never reaches the display.
+      const display = text.replace(
+        /\[@([^\]]+)\]/g,
+        (_, p: string) => (isImagePath(p) ? `📎 ${p}` : `@${p}`),
+      );
       try {
-        const hydrated = await hydrateMessage(text);
-        agentApi.submitMessage(hydrated, display);
+        const { text: hydrated, images } = await hydrateMessage(text, {
+          vision: agent.getConfig().vision === true,
+        });
+        agentApi.submitMessage(hydrated, display, images.length > 0 ? images : undefined);
       } catch {
         agentApi.submitMessage(text, display);
       }
     },
-    [handleSlashCommand, agentApi, paneRef, stateRef, sessionId],
+    [handleSlashCommand, agentApi, agent, paneRef, stateRef, sessionId],
   );
 
   return handleSubmit;

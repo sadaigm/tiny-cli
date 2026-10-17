@@ -13,7 +13,7 @@ A powerful, lightweight agentic AI coding assistant that supports any model via 
 - **🤖 Autonomous Agent Mode**: A sophisticated execution loop that cycles through *Research* → *Plan* → *Act* → *Verify*.
 - **🔌 MCP Client Integration**: Built-in support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Background connections don't block the TUI.
 - **🧠 Smart Context Management**: Automatic memory compaction handles long-running sessions (35k token trigger, configurable).
-- **📎 File Mentions (`@filename`)**: Instant context injection with fuzzy-search.
+- **📎 File Mentions (`@filename`)**: Instant context injection with fuzzy-search — including image attachments for vision models.
 - **🛡️ Permission-Based Execution**: Secure execution with configurable modes (`notify`, `auto-edit`, `auto`).
 - **📜 Hierarchical Slash Commands**: Nested command engine for managing sessions, models, and tools.
 - **🔧 Configurable Logging**: Log levels (`TRACE`, `DEBUG`, `LOG`, `ERROR`) via `agents.json`.
@@ -88,6 +88,15 @@ graph TD
 Typing `@` triggers a high-performance workspace indexer.
 - **Fuzzy Search**: Instantly filters files across your entire project.
 - **Context Hydration**: Selected files are read and injected into the agent's context window as a reference, ensuring the AI "sees" exactly what you are referring to.
+- **Image Mentions**: Mentioning an image (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) sends the image itself to the model (requires `"vision": true` on the profile) instead of dumping binary bytes as text.
+  - Sessions persist image **paths**, not the encoded data. Resuming a session (`--resume`, `/session load`) re-reads the files from disk, so the conversation keeps referring to the same images — the model receives them again, in the same places.
+  - The path is a pointer, not a snapshot: an image edited between sessions sends its current contents; a missing file degrades to an `[image @path missing]` note. Resume from the same working directory (paths are workspace-relative).
+
+### Shell Escape (`!`)
+Type `! <command>` to run a shell command and hand the result to the agent.
+- **Honors exec targets**: the command runs wherever the agent's `bash` tool runs (locally, or inside the profile's `docker`/`ssh` target).
+- **The agent responds**: command + output are sent as your next message, so the agent reacts to what happened.
+- Non-zero exits surface as an `[exit N]` line and ask the agent to diagnose and fix; `@`-mentions are not hydrated inside bang lines.
 
 ---
 
@@ -357,6 +366,7 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
 | `prompts.chat` | Override the chat-mode system prompt | Built-in default |
 | `prompts.plan` | Override the plan-mode (planning) system prompt | Built-in default |
 | `permissionMode` | `notify` (ask), `auto-edit` (auto files, ask bash), `auto` (no prompts) | `notify` |
+| `vision` | Model accepts image input; `@image` mentions are sent to it (see [File Mention System](#file-mention-system-)) | `false` |
 | `logLevel` | `TRACE`, `DEBUG`, `LOG`, `ERROR` | `LOG` |
 | `maxIterations` | Max agent loop iterations per query | Unlimited |
 | `compactionThresholdTokens` | Token count that triggers memory compaction | `35000` |

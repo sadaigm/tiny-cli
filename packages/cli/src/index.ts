@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { Agent, AgentStep, SessionManager, logDebug } from '@tiny-cli/core';
 import { loadConfig } from './config.js';
 import { startTui } from './tui/render.js';
+import { rehydrateSessionImages } from './file-mention.js';
 import chalk from 'chalk';
 
 const program = new Command();
@@ -62,7 +63,7 @@ Examples:
       }
 
       agent.setSessionId(currentSessionId);
-      agent.setHistory(session.messages);
+      agent.setHistory(await rehydrateSessionImages(session.messages));
 
       try {
         await startTui({
@@ -96,7 +97,7 @@ Examples:
       let session = await sessionManager.loadSession(currentSessionId);
 
       if (session) {
-        agent.setHistory(session.messages);
+        agent.setHistory(await rehydrateSessionImages(session.messages));
       } else {
         session = SessionManager.createSession(currentSessionId);
       }

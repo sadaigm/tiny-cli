@@ -1,6 +1,6 @@
 import type { MutableRefObject } from 'react';
 import type { ToolCall } from '@tiny-cli/core';
-import type { SessionManager, AskUserResponse } from '@tiny-cli/core';
+import type { SessionManager, AskUserResponse, ImageAttachment } from '@tiny-cli/core';
 import type { TuiMode, LogEntryType, PendingQuestionnaire, PendingRecovery, PendingPlanConfirm } from '../state.js';
 import type { MessageQueue } from '../utils/messageQueue.js';
 import type { Deferred } from '../utils/deferred.js';
@@ -158,7 +158,13 @@ export interface UseAgentApi {
    * If the agent is busy, the message is queued and processed after the
    * current turn completes.
    */
-  submitMessage: (text: string, displayText?: string) => void;
+  submitMessage: (text: string, displayText?: string, images?: ImageAttachment[]) => void;
+  /**
+   * Run a `!`-prefixed shell command (bang mode): execute via the active
+   * exec target, show the output in the transcript, and append it to model
+   * history — without starting a model turn.
+   */
+  runBangCommand: (text: string) => Promise<void>;
   /** Abort the current agent turn via `AbortController`. */
   abortCurrentRun: () => void;
   /**

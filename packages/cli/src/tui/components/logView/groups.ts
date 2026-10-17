@@ -39,7 +39,10 @@ export function groupEntries(entries: LogEntry[]): RenderGroup[] {
       groups.push({ start: i, end: i + 1, turn: false });
       i++;
       const start = i;
-      while (i < entries.length && entries[i]?.type !== 'user') i++;
+      // 'shell' entries (bang-mode output) never join an agent turn — they
+      // are user-initiated command output, so they break the group and
+      // render loose below.
+      while (i < entries.length && entries[i]?.type !== 'user' && entries[i]?.type !== 'shell') i++;
       if (i > start) groups.push({ start, end: i, turn: true });
     } else {
       // Entries before any user message (session hydration, banners).

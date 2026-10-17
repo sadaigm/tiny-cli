@@ -1,5 +1,6 @@
 import {
   AgentConfig,
+  ImageAttachment,
   Message,
   ToolResult,
   AgentResponse,
@@ -125,7 +126,8 @@ export class Agent {
     onApproval?: (call: ToolCall) => Promise<boolean>,
     onText?: (delta: string) => void,
     onReasoning?: (delta: string) => void,
-    onAskUser?: (payload: AskUserPayload) => Promise<AskUserResponse>
+    onAskUser?: (payload: AskUserPayload) => Promise<AskUserResponse>,
+    images?: ImageAttachment[]
   ): Promise<AgentResponse> {
     if (!continueSession) {
       this.messages = [];
@@ -290,7 +292,11 @@ GUIDANCE FOR PLAN EXECUTION:
     // so the fresh query is never summarized away. No-op under threshold.
     await this.compactMemoryIfNeeded(signal);
 
-    this.messages.push({ role: "user", content: userInput });
+    this.messages.push({
+      role: "user",
+      content: userInput,
+      ...(images && images.length > 0 ? { images } : {}),
+    });
     this.onHistoryChange?.();
 
     const steps: AgentStep[] = [];

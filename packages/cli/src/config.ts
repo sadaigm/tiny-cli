@@ -55,6 +55,8 @@ interface AgentProfile {
   enableSkillCommands?: boolean;
   /** Where the bash tool executes (docker container / ssh host); unset = local. */
   exec?: ExecTarget;
+  /** Model accepts image input; @image mentions are sent to it. Defaults to false. */
+  vision?: boolean;
 }
 
 /** Tool-owned runtime state, stored in preferences.json next to the resolved agents.json. */
@@ -192,7 +194,8 @@ export function profileToConfig(profile: AgentProfile, trusted: boolean, prefs?:
     textToolCallFallback: profile.settings?.textToolCallFallback === true,
     activeSkills: profile.settings?.activeSkills,
     profileName: profile.name,
-    execTarget: profile.exec
+    execTarget: profile.exec,
+    vision: profile.vision === true
   };
 }
 

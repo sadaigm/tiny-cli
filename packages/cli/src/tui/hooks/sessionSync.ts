@@ -22,7 +22,13 @@ export function createSaveSession(deps: {
   const { agent, sessionManager, sessionId, setState } = deps;
   return async (): Promise<void> => {
     try {
-      const messages = agent.getHistory();
+      // Persist image attachments as path-only (no base64) — session files
+      // stay small; the files are re-read on session load.
+      const messages = agent.getHistory().map((m) =>
+        m.images
+          ? { ...m, images: m.images.map(({ path, mimeType }) => ({ path, mimeType })) }
+          : m,
+      );
       // Create-on-first-save: if the file doesn't exist yet (startup no
       // longer pre-writes an empty one), persist instead of silently
       // dropping the whole conversation.

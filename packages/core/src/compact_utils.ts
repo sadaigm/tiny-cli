@@ -4,6 +4,9 @@ import { getEncoding } from "js-tiktoken";
 export const DEFAULT_COMPACT_THRESHOLD = 35_000;
 export const DEFAULT_COMPACT_RETAIN = 8_000;
 export const TOOL_CALLS_PER_COMPACT_CHECK = 10;
+/** Flat token cost per attached image (base64 never enters `content`, so it
+ * is otherwise invisible to the char/token estimate). */
+export const IMAGE_ATTACHMENT_TOKENS = 800;
 
 /** Token/char stats for a message list (cl100k_base). */
 export function measureContext(messages: Message[]): { tokens: number; characters: number } {
@@ -21,6 +24,10 @@ export function measureContext(messages: Message[]): { tokens: number; character
       const toolCallsStr = JSON.stringify(m.tool_calls);
       totalChars += toolCallsStr.length;
       totalTokens += encoder.encode(toolCallsStr).length;
+    }
+
+    if (m.images) {
+      totalTokens += m.images.length * IMAGE_ATTACHMENT_TOKENS;
     }
   }
 
@@ -57,6 +64,7 @@ export function planCompaction(messages: Message[], config: AgentConfig): Compac
     let msgTokens = 0;
     if (m.content) msgTokens += encoder.encode(m.content).length;
     if (m.tool_calls) msgTokens += encoder.encode(JSON.stringify(m.tool_calls)).length;
+    if (m.images) msgTokens += m.images.length * IMAGE_ATTACHMENT_TOKENS;
 
     if (retainedTokens + msgTokens > targetRetainedTokens) {
       break;
