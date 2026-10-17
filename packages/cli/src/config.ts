@@ -138,6 +138,38 @@ export async function loadProfiles(): Promise<{ profiles: AgentProfile[]; filePa
           appBasePath: "/v1",
           insecure: true
         }
+      },
+      {
+        // Example: agent executes inside a Docker container instead of locally.
+        // `root` is the HOST folder bind-mounted into the container; its
+        // container-side mount point is auto-detected via `docker inspect`.
+        // Switch with /profile docker (validated: container must be running).
+        name: 'docker',
+        model: 'llama3.2:latest',
+        description: 'Example: execute in a Docker container (edit exec.container)',
+        temperature: 0.7,
+        environment: {
+          hostUrl: "http://localhost:11434",
+          appBasePath: "/v1",
+          insecure: true
+        },
+        exec: { kind: 'container', container: 'my-dev-container', root: '/home/you/my-project' }
+      },
+      {
+        // Example: agent executes on a remote host over ssh (host may be a
+        // ~/.ssh/config alias). `root` = path on the remote; `hostRoot` = its
+        // local mirror, so file tools (read/edit) work on the copy. Without
+        // both, the profile is bash-only. Requires passwordless ssh.
+        name: 'ssh',
+        model: 'llama3.2:latest',
+        description: 'Example: execute on a remote host via ssh (edit exec.host)',
+        temperature: 0.7,
+        environment: {
+          hostUrl: "http://localhost:11434",
+          appBasePath: "/v1",
+          insecure: true
+        },
+        exec: { kind: 'remote', host: 'my-server', root: '/home/you/my-project', hostRoot: '/Users/you/my-project' }
       }
     ];
 

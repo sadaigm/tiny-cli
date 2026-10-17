@@ -94,7 +94,7 @@ Typing `@` triggers a high-performance workspace indexer.
 
 ### Shell Escape (`!`)
 Type `! <command>` to run a shell command and hand the result to the agent.
-- **Honors exec targets**: the command runs wherever the agent's `bash` tool runs (locally, or inside the profile's `docker`/`ssh` target).
+- **Honors exec targets**: the command runs wherever the agent's `bash` tool runs (locally, or inside the profile's `docker`/`ssh` target — see [Execution Targets](#execution-targets)).
 - **The agent responds**: command + output are sent as your next message, so the agent reacts to what happened.
 - Non-zero exits surface as an `[exit N]` line and ask the agent to diagnose and fix; `@`-mentions are not hydrated inside bang lines.
 
@@ -355,6 +355,42 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
 }
 ```
 
+### Execution Targets
+
+A profile's `exec` key routes the agent's commands somewhere other than your local machine — into a **Docker container** or onto a **remote host over ssh**. `bash`, file tools, and the `!` shell escape all honor it; everything else about the profile (model, prompts, MCP servers) stays the same. Unset `exec` = run locally, as before.
+
+**Container** — commands run via `docker exec`:
+
+```json
+{
+  "name": "docker",
+  "model": "llama3.2:latest",
+  "exec": { "kind": "container", "container": "my-dev-container", "root": "/home/you/my-project" }
+}
+```
+
+- `root` is the **host-side folder** bind-mounted into the container. On load, tiny-cli runs `docker inspect` to find that bind mount and resolves the container-side path, so the model's paths map correctly and file tools (`read`/`edit`/`grep`/`glob`/`list`) operate on your host copy of the files.
+- If the mount can't be resolved (container not bind-mounted at `root`), the profile degrades to **bash-only**: file tools are blocked with a "Use bash" hint instead of silently touching the wrong directory.
+
+**Remote (ssh)** — commands run via `ssh`:
+
+```json
+{
+  "name": "ssh",
+  "model": "llama3.2:latest",
+  "exec": { "kind": "remote", "host": "my-server", "root": "/home/you/my-project", "hostRoot": "/Users/you/my-project" }
+}
+```
+
+- `host` is passed verbatim to ssh, so `~/.ssh/config` aliases work. Passwordless auth (key/agent) is required — verified at switch time.
+- `root` is the project path **on the remote**; `hostRoot` is its **local mirror**. ssh exposes no mount table to inspect, so both must be explicit for file tools to work. Omit them for a bash-only profile.
+
+**Notes:**
+
+- Optional `shell` selects the shell inside the target (default `/bin/bash`).
+- Targets are validated when you switch to the profile (`/profile <name>`): the container must exist and be running; the ssh host must answer `ssh -o BatchMode=yes`.
+- The auto-generated `~/.tiny-cli/agents.json` ships with `docker` and `ssh` example profiles you can edit or delete.
+
 ### Configuration Fields
 
 | Field | Description | Default |
@@ -371,6 +407,12 @@ Configured via `.tiny-cli/agents.json` (project-local) or `~/.tiny-cli/agents.js
 | `maxIterations` | Max agent loop iterations per query | Unlimited |
 | `compactionThresholdTokens` | Token count that triggers memory compaction | `35000` |
 | `compactionRetainTokens` | Recent tokens kept raw (un-summarized) during compaction | `8000` |
+| `exec.kind` | Execution target: `"container"` or `"remote"`; unset = local (see [Execution Targets](#execution-targets)) | *(local)* |
+| `exec.container` | Container name (`kind: "container"`) — required | — |
+| `exec.host` | ssh host or `~/.ssh/config` alias (`kind: "remote"`) — required | — |
+| `exec.root` | Container: host folder bind-mounted in. Remote: project path on the host | — |
+| `exec.hostRoot` | Remote: local mirror of `root` (enables file tools). Container: overrides auto-detection | — |
+| `exec.shell` | Shell used inside the target | `/bin/bash` |
 | `environment.hostUrl` | Model API base URL | `http://localhost:11434` |
 | `environment.appBasePath` | API path prefix | `/v1` |
 | `environment.apiKey` | API key for authenticated endpoints | `none` |
