@@ -386,6 +386,10 @@ function InputBox({
 
   const modeColor = modeColors()[mode];
   const modeLabel = MODE_LABELS[mode];
+  // `!` as the first character escapes to the shell (shellExec.ts) — badge
+  // the prompt so the user sees the mode before committing.
+  const shellMode = value.startsWith('!');
+  const shellColor = getTheme().toolCall;
 
   return (
     <Box flexDirection="column">
@@ -411,10 +415,12 @@ function InputBox({
         </Box>
       ) : (
         <Box>
-          <Text color={modeColor} bold>
+          <Text color={shellMode ? shellColor : modeColor} bold>
             ❯
           </Text>
-          {modeLabel ? (
+          {shellMode ? (
+            <Text color={shellColor}> [shell]</Text>
+          ) : modeLabel ? (
             <Text color={modeColor}> [{modeLabel}]</Text>
           ) : null}
           <Box flexGrow={1} marginLeft={1}>
