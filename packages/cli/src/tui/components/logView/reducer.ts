@@ -23,12 +23,6 @@ export interface LogView {
    * than the pane. 0 = top of the entry's body.
    */
   lineOffset: number;
-  /**
-   * Ids of turn groups (keyed by the group's first entry id) folded to
-   * their one-line gist. Submitting a message folds every completed turn;
-   * Tab on a folded turn unfolds it (chat-redesign aging behavior).
-   */
-  folded: Set<string>;
 }
 
 export type LogViewAction =
@@ -36,13 +30,11 @@ export type LogViewAction =
   | { type: 'FOCUS_ABS'; index: number; length: number; rearm?: boolean }
   | { type: 'SCROLL_LINE'; offset: number }
   | { type: 'TOGGLE_EXPAND'; id: string }
-  | { type: 'TOGGLE_FOLD'; id: string }
-  | { type: 'FOLD_TURNS'; ids: string[] }
   | { type: 'RECONCILE'; length: number; rearm?: boolean }
   | { type: 'RUNNING_CHANGE'; running: boolean; entries?: LogEntry[] };
 
 export function createLogView(length: number): LogView {
-  return { focusIndex: length > 0 ? length - 1 : 0, expanded: new Set(), autoFollow: true, lineOffset: 0, folded: new Set() };
+  return { focusIndex: length > 0 ? length - 1 : 0, expanded: new Set(), autoFollow: true, lineOffset: 0 };
 }
 
 export function logViewReducer(state: LogView, action: LogViewAction): LogView {
@@ -74,20 +66,6 @@ export function logViewReducer(state: LogView, action: LogViewAction): LogView {
       if (expanded.has(action.id)) expanded.delete(action.id);
       else expanded.add(action.id);
       return { ...state, expanded, lineOffset: 0 };
-    }
-    case 'TOGGLE_FOLD': {
-      const folded = new Set(state.folded);
-      if (folded.has(action.id)) folded.delete(action.id);
-      else folded.add(action.id);
-      return { ...state, folded };
-    }
-    case 'FOLD_TURNS': {
-      // Fold unconditionally (ids already exclude live/newest groups) — a
-      // turn the user manually unfolded stays folded on the next submit,
-      // matching the chat-redesign rule "old turns age to one line".
-      const folded = new Set(state.folded);
-      for (const id of action.ids) folded.add(id);
-      return { ...state, folded };
     }
     case 'RECONCILE': {
       // New entries arrived (or log cleared). Clamp focus; auto-follow pins to tail.

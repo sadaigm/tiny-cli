@@ -29,7 +29,8 @@ export type BindableAction =
   | 'historySearch'
   | 'sessionSwitcher'
   | 'abort'
-  | 'yank';
+  | 'yank'
+  | 'expand';
 
 /** Canonical key descriptor: modifiers + base key. */
 export interface KeyDescriptor {
@@ -47,6 +48,7 @@ export const DEFAULT_BINDINGS: Record<BindableAction, string> = {
   sessionSwitcher: 'ctrl+s',
   abort: 'escape',
   yank: 'y',
+  expand: 'ctrl+e',
 };
 
 /** Project-first (like agents.json): `<cwd>/.tiny-cli/keys.json` wins over the home copy. */

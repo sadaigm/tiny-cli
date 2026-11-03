@@ -19,20 +19,27 @@ import { getTheme } from '../theme.js';
  * Markdown renders through the same {@link markdownToLines} layout the
  * committed entries use; no streaming special-casing — every delta re-runs
  * the pure function, and unterminated markers render literally until the
- * closing marker arrives.
+ * closing marker arrives. `maxLines` caps the panel to its tail so it can
+ * never overflow the pane (see MessageLog's reserve math).
  */
-export default function ResponsePanel({ columns = 80 }: { columns?: number }): React.ReactNode | null {
+export default function ResponsePanel({ columns = 80, maxLines }: { columns?: number; maxLines?: number }): React.ReactNode | null {
   const store = useStreamStore();
   const section = useSyncExternalStore(store.subscribeResponse, store.getResponse);
   if (!section.active || !section.text) return null;
 
   const theme = getTheme();
-  const lines = markdownToLines(section.text, Math.max(1, columns - 3));
+  const all = markdownToLines(section.text, Math.max(1, columns - 3));
+  // Cap to a tail slice: the live panel must stay bounded or it overflows
+  // the fixed-height pane and draws over the cards above it. MessageLog
+  // reserves the same budget in its window math.
+  const hidden = maxLines !== undefined ? Math.max(0, all.length - maxLines) : 0;
+  const lines = maxLines === undefined ? all : all.slice(-maxLines);
 
   return (
     <Box flexDirection="column">
       <Box>
         <Text color={theme.assistant}>  🤖 Agent:</Text>
+        {hidden > 0 ? <Text dimColor>{`  ⤤ ${hidden} lines above`}</Text> : null}
       </Box>
       <Box marginLeft={3}>
         <MarkdownBody lines={lines} color={undefined} />

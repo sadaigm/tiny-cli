@@ -6,9 +6,14 @@
  * pane will overflow/clip (visible as flicker/jump, or a pane that appears
  * stuck when an expanded entry dwarfs the viewport). Tool bodies are counted
  * through the toolViews registry — the same source the renderer draws from.
+ *
+ * Chat-cards semantics (chat-cards-design.md): tool_call / tool_result /
+ * reasoning / assistant entries render as cards — 1 header row + body, where
+ * a collapsed card's body is a single ellipsized line. User messages render
+ * in full (right-aligned bubble); plain entries keep the capped wrapped body.
  */
 import type { LogEntry } from '../../state.js';
-import { MAX_STANDARD_BODY_LINES } from '../MessageItem.js';
+import { MAX_STANDARD_BODY_LINES, MAX_ASSISTANT_BODY_LINES, cardColumnsOf } from '../MessageItem.js';
 import { toolBodyLines } from '../toolViews/index.js';
 import { markdownToLines } from '../../utils/markdown.js';
 
@@ -26,61 +31,70 @@ export function wrappedLineCount(text: string, usable: number): number {
     .reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / usable)), 0);
 }
 
+/** Card entry types: collapsed = header + one ellipsized body line. */
+function isCardType(entry: LogEntry): boolean {
+  return (
+    entry.type === 'tool_call' ||
+    entry.type === 'tool_result' ||
+    entry.type === 'reasoning' ||
+    entry.type === 'assistant' ||
+    entry.type === 'user'
+  );
+}
+
+/**
+ * Total body lines of an entry (ignoring collapse/expand state) — the `+N`
+ * hidden-line count and the expanded body height both come from here.
+ */
+function totalBodyLines(entry: LogEntry, columns: number): number {
+  // Card bodies lay out against the card width (80% of the pane), not the
+  // pane itself — mirror cardColumnsOf or the counts drift from the render.
+  const cardCols = cardColumnsOf(columns);
+  const usable = Math.max(1, cardCols - BODY_INDENT);
+  if (entry.type === 'tool_call' || entry.type === 'tool_result') {
+    return toolBodyLines(entry, cardCols);
+  }
+  if (entry.type === 'reasoning') {
+    return entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
+  }
+  if (entry.type === 'user' || entry.type === 'assistant') {
+    return markdownToLines(entry.content, usable).length;
+  }
+  return entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
+}
+
 /**
  * Estimate the terminal lines a single entry occupies when rendered.
  *
- * - tool_call / tool_result: 1 line when collapsed (summary); when
- *   expanded, 1 header line + the wrapped detail block from the same
- *   summarizer the renderer uses (same cap, same text).
- * - user / assistant: 1 header line + the body laid out by
- *   `markdownToLines(entry.content, usable)` — the SAME pure function
- *   MessageItem renders through, so the estimator counts the exact MdLine
- *   rows the renderer draws (markdown layout, word wrap, list/code rows).
- *   Collapsed bodies cap at MAX_STANDARD_BODY_LINES, expanded do not.
- * - system / info / error: treated like a wrapped body line.
+ * - Cards (user / assistant / tool / reasoning): 1 header row + 1 body line
+ *   when collapsed; 1 header row + the full body (from the same source the
+ *   renderer draws: toolViews / markdownToLines) when expanded.
+ * - system / info / error / shell: capped wrapped body when collapsed.
  */
-export function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number, inTurn = false): number {
+export function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number): number {
   // Defensive: a malformed entry (null/undefined, or missing `type`/`content`)
   // must not crash the whole pane — count it as a single line and move on.
   if (!entry || typeof entry.type !== 'string' || typeof entry.content !== 'string') return 1;
-  const usable = Math.max(1, columns - BODY_INDENT);
-  if (entry.type === 'tool_call' || entry.type === 'tool_result') {
-    if (!expanded.has(entry.id)) return 1;
-    // Same view the renderer draws — the registry is the single source of
-    // truth for tool body lines (toolViews/index.tsx).
-    let lines = 1 + toolBodyLines(entry, columns);
-    if (lineCap !== undefined) lines = Math.min(lines, 1 + lineCap);
-    return lines;
-  }
-  // Reasoning: 1 header + full body while streaming; 1 header + 1 body
-  // line when collapsed after the turn (matching MessageItem's render).
-  if (entry.type === 'reasoning') {
-    const rawBodyLines = entry.content.length === 0 ? 0 : wrappedLineCount(entry.content, usable);
-    let bodyLines = entry.live || expanded.has(entry.id) ? rawBodyLines : Math.min(rawBodyLines, 1);
+  const total = totalBodyLines(entry, columns);
+  const isOpen = expanded.has(entry.id);
+
+  if (isCardType(entry)) {
+    // Reasoning streams in full while its entry is live (thinking phase);
+    // assistant cards show up to MAX_ASSISTANT_BODY_LINES lines even when
+    // collapsed (the answer is the main content — see MessageItem).
+    let bodyLines: number;
+    if (entry.type === 'reasoning') bodyLines = entry.live || isOpen ? total : Math.min(total, 1);
+    else if (entry.type === 'assistant') bodyLines = isOpen ? total : Math.min(total, MAX_ASSISTANT_BODY_LINES);
+    else bodyLines = isOpen ? total : Math.min(total, 1);
     if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
-    return Math.max(1, 1 + bodyLines);
+    // +1 header row +1 inner bottom padding row (see Card/UserCard).
+    return Math.max(1, 2 + bodyLines);
   }
-  // Count rendered lines: markdown layout for user/assistant (the same
-  // `markdownToLines` array MessageItem renders), `wrapIndent` chunk count
-  // for the plain entry types. Collapsed standard entries cap at
-  // MAX_STANDARD_BODY_LINES (matching MessageItem's render).
-  // User/assistant messages are exempt — they render in full (see MessageItem).
-  const rawBodyLines =
-    entry.type === 'user' || entry.type === 'assistant'
-      ? markdownToLines(entry.content, usable).length
-      : entry.content.length === 0
-        ? 0
-        : wrappedLineCount(entry.content, usable);
-  let bodyLines =
-    expanded.has(entry.id) || entry.type === 'user' || entry.type === 'assistant'
-      ? rawBodyLines
-      : Math.min(rawBodyLines, MAX_STANDARD_BODY_LINES);
+
+  let bodyLines = isOpen ? total : Math.min(total, MAX_STANDARD_BODY_LINES);
   if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
-  // user/assistant have a header row ("❯" / "● Agent"); others are body-only.
-  // Assistant entries inside a turn group render body-only (the group header
-  // is the turn's single header), so they contribute no header line.
-  const headerLines = entry.type === 'user' || (entry.type === 'assistant' && !inTurn) ? 1 : 0;
-  return Math.max(1, headerLines + bodyLines);
+  // Plain entries render body-only rows.
+  return Math.max(1, bodyLines);
 }
 
 /**
@@ -91,57 +105,19 @@ export function estimateLines(entry: LogEntry, columns: number, expanded: Set<st
 export function renderedBodyLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning: boolean): number {
   // Defensive: a malformed entry must not crash the pane — count no body.
   if (!entry || typeof entry.type !== 'string' || typeof entry.content !== 'string') return 0;
-  const usable = Math.max(1, columns - BODY_INDENT);
-  if (entry.type === 'tool_call' || entry.type === 'tool_result') {
-    if (!expanded.has(entry.id)) return 0;
-    return toolBodyLines(entry, columns);
+  const total = totalBodyLines(entry, columns);
+  const isOpen = expanded.has(entry.id);
+
+  if (isCardType(entry)) {
+    if (entry.type === 'reasoning') return entry.live || isOpen ? total : Math.min(total, 1);
+    if (entry.type === 'assistant') return isOpen ? total : Math.min(total, MAX_ASSISTANT_BODY_LINES);
+    return isOpen ? total : Math.min(total, 1);
   }
-  if (entry.type === 'reasoning') {
-    if (entry.content.length === 0) return 0;
-    const raw = wrappedLineCount(entry.content, usable);
-    return entry.live || expanded.has(entry.id) ? raw : Math.min(raw, 1);
-  }
-  if (entry.content.length === 0) return 0;
-  // User/assistant: the same markdownToLines array MessageItem renders.
-  const raw =
-    entry.type === 'user' || entry.type === 'assistant'
-      ? markdownToLines(entry.content, usable).length
-      : wrappedLineCount(entry.content, usable);
-  // User/assistant messages render in full even when collapsed (see MessageItem).
-  if (entry.type === 'user' || entry.type === 'assistant') return raw;
-  return expanded.has(entry.id) ? raw : Math.min(raw, MAX_STANDARD_BODY_LINES);
+  return isOpen ? total : Math.min(total, MAX_STANDARD_BODY_LINES);
 }
 
 /** Lines of an entry's body the pane can show (1 pane header, 1 entry header). */
 export const VISIBLE_BODY_BUDGET = (paneHeight: number): number => Math.max(1, paneHeight - 2);
-
-/**
- * Visible height of a turn group's rail: the sum of the members' rendered
- * lines, applying the same focused-entry cap the renderer applies — so the
- * rail is exactly as tall as the body beside it.
- */
-export function railHeight(
-  entries: LogEntry[],
-  expanded: Set<string>,
-  from: number,
-  to: number,
-  columns: number,
-  paneHeight: number,
-  agentRunning: boolean,
-  focusId?: string,
-): number {
-  const budget = VISIBLE_BODY_BUDGET(paneHeight);
-  let total = 0;
-  for (let i = from; i < to; i++) {
-    const entry = entries[i];
-    let lines = estimateLines(entry, columns, expanded, agentRunning, undefined, true);
-    if (entry.id === focusId && renderedBodyLines(entry, columns, expanded, agentRunning) > budget) {
-      lines = Math.min(lines, 1 + budget);
-    }
-    total += lines;
-  }
-  return Math.max(1, total);
-}
 
 /** Result of computing the visible window for the current focus + size. */
 interface Window {
@@ -166,35 +142,32 @@ export function computeWindow(
   autoFollow: boolean,
   expanded: Set<string>,
   agentRunning: boolean,
-  extraLines: number[] = [],
-  turnMember: boolean[] = [],
-  lineOverride: (number | null)[] = [],
+  reserveLines = 0,
 ): Window {
   const n = entries.length;
   if (n === 0 || paneHeight <= 1) {
     return { startIndex: 0, endIndex: 0, linesAbove: 0, linesBelow: 0 };
   }
-  // Rendered cost of an entry: folded-group members are overridden outright
-  // (gist line = 1 on the group start, 0 on the rest); everything else is its
-  // own estimate plus any group-header row, with turn members' assistant
-  // entries suppressing their own header (inTurn).
+  // Rendered cost of an entry: its own estimate plus the 1-row gap rendered
+  // between cards (every entry except the very first).
   const cost = (i: number, cap?: number): number =>
-    lineOverride[i] != null
-      ? (lineOverride[i] as number)
-      : estimateLines(entries[i], columns, expanded, agentRunning, cap, turnMember[i] ?? false) + (extraLines[i] ?? 0);
+    estimateLines(entries[i], columns, expanded, agentRunning, cap) + (i > 0 ? 1 : 0);
   // When the focused entry is expanded taller than the pane, its body is
   // windowed to this many lines (see MessageItem's maxLines) — cap the
   // estimate to match so the viewport math stays honest.
   const focusBudget = VISIBLE_BODY_BUDGET(paneHeight);
   const capFor = (i: number): number | undefined => {
     if (i !== focusIndex) return undefined;
-    return estimateLines(entries[i], columns, expanded, agentRunning, undefined, turnMember[i] ?? false) - 1 > focusBudget
+    return estimateLines(entries[i], columns, expanded, agentRunning) - 1 > focusBudget
       ? focusBudget
       : undefined;
   };
-  // Auto-follow: always show the tail.
+  // Auto-follow: always show the tail. Budget reserves 1 row for the pane
+  // header plus `reserveLines` for the live streaming panels rendered below
+  // the cards (ThinkingPanel/ResponsePanel) — without the reserve the pane
+  // overflows once the conversation fills it and cards draw over the panels.
   if (autoFollow) {
-    const budget = paneHeight - 1;
+    const budget = paneHeight - 1 - reserveLines;
     let start = n;
     let used = 0;
     for (let i = n - 1; i >= 0; i--) {
@@ -207,7 +180,7 @@ export function computeWindow(
   }
 
   // Focus-anchored: grow downward first, then upward, to keep focus in view.
-  const budget = paneHeight - 1;
+  const budget = paneHeight - 1 - reserveLines;
   let start = focusIndex;
   let end = focusIndex + 1;
   let used = cost(focusIndex, capFor(focusIndex));

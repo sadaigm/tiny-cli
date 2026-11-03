@@ -14,8 +14,7 @@ import { logTrace } from '@tiny-cli/core';
 import type { LogEntry } from '../state.js';
 import MessageItem from './MessageItem.js';
 import { logViewReducer, createLogView, type LogView } from './logView/reducer.js';
-import { VISIBLE_BODY_BUDGET, renderedBodyLines, computeWindow, railHeight } from './logView/estimator.js';
-import { groupEntries, groupKey, turnHeader } from './logView/groups.js';
+import { VISIBLE_BODY_BUDGET, renderedBodyLines, computeWindow } from './logView/estimator.js';
 import { copyToClipboard, entryClipboardText } from '../utils/clipboard.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
 import { useStreamStore } from './StreamProvider.js';
@@ -133,16 +132,6 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       const grew = entries.length > prevLengthRef.current;
       const rearm = grew && entries.slice(prevLengthRef.current).some((e) => e.type === 'user');
       dispatch({ type: 'RECONCILE', length: entries.length, rearm });
-      // Submitting a message ages the conversation: every turn group except
-      // the newest collapses to its one-line gist (chat-redesign behavior).
-      if (rearm) {
-        const turnGroups = groupEntries(entries).filter((g) => g.turn);
-        const keepNewest = turnGroups[turnGroups.length - 1];
-        dispatch({
-          type: 'FOLD_TURNS',
-          ids: turnGroups.filter((g) => g !== keepNewest).map((g) => groupKey(entries, g)),
-        });
-      }
       prevLengthRef.current = entries.length;
     }
   }, [entries.length, entries]);
@@ -194,7 +183,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   // mode enabled exactly once and avoids raw-mode churn that can drop the
   // stdin readable listener and kill all input.
   const onPaneKey = useCallback(
-    (input: string, key: { ctrl?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean; home?: boolean; end?: boolean }) => {
+    (input: string, key: { ctrl?: boolean; shift?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean; home?: boolean; end?: boolean }) => {
       try {
       const n = entriesRef.current.length;
 
@@ -202,6 +191,14 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       // toggles from either state.
       if (matchesBinding(input, key, bindingFor('browse'))) {
         setBrowse(!browseModeRef.current);
+        return;
+      }
+      // Expand/collapse works in normal mode too — same effect as clicking
+      // the card's header row. Targets the focused entry (the tail while
+      // following).
+      if (matchesBinding(input, key, bindingFor('expand'))) {
+        const focused = entriesRef.current[viewRef.current.focusIndex];
+        if (focused) dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
         return;
       }
       // Inside browse mode: arrows/Tab/Home/End/PgUp/PgDn drive the pane;
@@ -250,38 +247,21 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeightRef.current - 1), length: n });
         else if (key.pageDown) dispatch({ type: 'FOCUS_DELTA', delta: paneHeightRef.current - 1, length: n });
         else if (key.tab) {
-          // Tab toggles whatever is focused (tree-browse-navigation-plan):
-          // on a turn header entry → fold/unfold the whole turn; on a turn
-          // child (thinking/tool) or a loose entry → expand/collapse it.
+          // Tab toggles the focused card: expand/collapse (chat-cards design
+          // — same effect as clicking the card's header row).
           const focused = entriesRef.current[focusIndexRef.current];
-          if (focused) {
-            const fg = groupEntries(entriesRef.current).find(
-              (g) => g.turn && focusIndexRef.current >= g.start && focusIndexRef.current < g.end,
-            );
-            if (fg && focusIndexRef.current === fg.start)
-              dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
-            else dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
-          }
+          if (focused) dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
         } else if (key.rightArrow) {
-          // → Enter: unfold the focused turn (if folded) and drop the cursor
-          // to its first child. No-op on loose entries.
-          const fg = groupEntries(entriesRef.current).find(
-            (g) => g.turn && focusIndexRef.current >= g.start && focusIndexRef.current < g.end,
-          );
-          if (fg) {
-            if (viewRef.current.folded.has(groupKey(entriesRef.current, fg)))
-              dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
-            dispatch({ type: 'FOCUS_ABS', index: fg.start + 1, length: n });
+          // → Expand the focused card (no-op when already expanded).
+          const focused = entriesRef.current[focusIndexRef.current];
+          if (focused && !viewRef.current.expanded.has(focused.id)) {
+            dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
           }
         } else if (key.leftArrow) {
-          // ← Exit: fold the turn containing the cursor from any child,
-          // cursor lands on its header. No-op on loose entries.
-          const fg = groupEntries(entriesRef.current).find(
-            (g) => g.turn && focusIndexRef.current >= g.start && focusIndexRef.current < g.end,
-          );
-          if (fg) {
-            dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entriesRef.current, fg) });
-            dispatch({ type: 'FOCUS_ABS', index: fg.start, length: n });
+          // ← Collapse the focused card (no-op when already collapsed).
+          const focused = entriesRef.current[focusIndexRef.current];
+          if (focused && viewRef.current.expanded.has(focused.id)) {
+            dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
           }
         } else if (matchesBinding(input, key, bindingFor('yank'))) {
           // Yank: OSC 52 copy of the focused entry's raw content (tool
@@ -334,42 +314,16 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     [dispatchWheel, entries],
   );
 
-  // Turn grouping — shared by the estimator and the renderer (see groupEntries).
-  const groups = useMemo(() => groupEntries(entries), [entries]);
-  const turnMember = useMemo(() => {
-    const member = new Array<boolean>(entries.length).fill(false);
-    for (const g of groups) if (g.turn) for (let i = g.start; i < g.end; i++) member[i] = true;
-    return member;
-  }, [entries, groups]);
-
-  // Layout facts derived once, shared by the estimator and the renderer:
-  // - extra: +1 header row on each unfolded turn group start, +1 spacing row
-  //   before every group except the very first entry.
-  // - override: folded turn groups collapse to a single gist line
-  //   (spacing + gist on the group start, 0 on the hidden members).
-  const { extra, override } = useMemo(() => {
-    const extra = new Array<number>(entries.length).fill(0);
-    const override = new Array<number | null>(entries.length).fill(null);
-    for (const g of groups) {
-      const spacing = g.start > 0 ? 1 : 0;
-      if (!g.turn) {
-        extra[g.start] += spacing;
-        continue;
-      }
-      if (view.folded.has(groupKey(entries, g))) {
-        for (let i = g.start; i < g.end; i++) override[i] = 0;
-        override[g.start] = spacing + 1; // blank row + gist line
-      } else {
-        extra[g.start] += spacing + 1; // blank row + `● Agent` header
-      }
-    }
-    return { extra, override };
-  }, [entries, groups, view.folded]);
-
-  // Compute the visible window — memoised on relevant inputs.
+  // Chat-cards layout: flat list, no turn grouping — computeWindow counts
+  // each entry as its card (header + body) plus the 1-row gap between cards.
+  // While streaming, rows are reserved for the live panels below the cards
+  // (thinking ≤ 4 rows, response ≤ 1 + RESPONSE_CAP) so the pane never
+  // overflows into the overlap garble.
+  const responseCap = Math.max(3, Math.floor((paneHeight - 1) / 3));
+  const reserve = agentRunning ? 4 + 1 + responseCap : 0;
   const win = useMemo(
-    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, extra, turnMember, override),
-    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, extra, turnMember, override],
+    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, reserve),
+    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, reserve],
   );
 
   const visibleEntries = entries.slice(win.startIndex, win.endIndex);
@@ -379,15 +333,16 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       ? `↑ ${win.linesAbove} above · ↓ ${win.linesBelow} below${view.autoFollow ? ' · following' : ''}`
       : '';
   const headerText = browseMode
-    ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · → enter · ← fold · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}${yankStatus ? '  ·  ' + yankStatus : ''}`
-    : `${positionHint ? positionHint + '  ·  ' : ''}Ctrl+P to browse`;
+    ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · → expand · ← collapse · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}${yankStatus ? '  ·  ' + yankStatus : ''}`
+    : `${positionHint ? positionHint + '  ·  ' : ''}Ctrl+E expand · Ctrl+P to browse`;
 
-  // Chunk the visible window into render groups. Groups clipped by the
-  // window still render correctly: their header/rail covers only the visible
-  // members (the estimator charged the header when the group's first member
-  // entered the window).
-  const renderItem = (entry: LogEntry, index: number, inTurn = false): React.ReactNode => {
+  // Render one entry card at its current expand/focus state.
+  const renderItem = (entry: LogEntry): React.ReactNode => {
     const isFocused = entry.id === entries[view.focusIndex]?.id;
+    // Focus fill only in browse mode: during streaming, auto-follow moves
+    // focus to each newest entry, which made new cards flash cardFocused
+    // before settling into their family shade.
+    const showFocused = isFocused && browseMode;
     const budget = VISIBLE_BODY_BUDGET(paneHeight);
     const scrollable =
       isFocused &&
@@ -396,84 +351,24 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       <MessageItem
         key={entry.id}
         entry={entry}
-        focused={isFocused}
+        focused={showFocused}
         expanded={view.expanded.has(entry.id)}
         agentRunning={agentRunning}
         columns={paneColumns}
         lineOffset={scrollable ? view.lineOffset : 0}
         maxLines={scrollable ? budget : undefined}
-        inTurn={inTurn}
         onToggle={() => dispatch({ type: 'TOGGLE_EXPAND', id: entry.id })}
       />
     );
   };
 
-  const theme = getTheme();
+  // Flat card list (chat-cards design): one card per entry, 1 blank row
+  // between cards. The estimator charges the same gap (see computeWindow).
   const renderChunks = (): React.ReactNode[] => {
     const out: React.ReactNode[] = [];
-    for (const g of groups) {
-      if (g.end <= win.startIndex || g.start >= win.endIndex) continue;
-      const from = Math.max(g.start, win.startIndex);
-      const to = Math.min(g.end, win.endIndex);
-      const blank = g.start > 0 && from === g.start ? <Text key={`sp-${g.start}`}>{' '}</Text> : null;
-      if (blank) out.push(blank);
-      if (!g.turn) {
-        for (let i = from; i < to; i++) out.push(renderItem(entries[i], i));
-        continue;
-      }
-      const live = agentRunning && g.end === entries.length;
-      const { gist, tools } = turnHeader(entries, g);
-      const meta = live ? 'streaming…' : `${tools} tool${tools === 1 ? '' : 's'}`;
-      // Folded turn: one dim gist line (⌄ hints it can unfold).
-      if (view.folded.has(groupKey(entries, g))) {
-        out.push(
-          <Box key={`fold-${g.start}`} justifyContent="space-between"
-            onMouseDown={() => dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entries, g) })}>
-            <Text color={theme.toolResult}>
-              {'● '}
-              {gist ? gist.slice(0, Math.max(4, paneColumns - 24)) : 'Agent turn'}
-            </Text>
-            <Text dimColor>{meta}  ⌄</Text>
-          </Box>,
-        );
-        continue;
-      }
-      // Agent turn: header row + left rail around its (visible) members.
-      // The header renders only when the group's first member is inside the
-      // window — exactly when the estimator charged its +1 line, so the
-      // viewport math and the render stay in sync when the window clips a
-      // group at the top.
-      const railColor = live ? theme.accent : theme.border;
-      out.push(
-        <Box key={`turn-${g.start}`} flexDirection="column">
-          {from === g.start ? (
-            <Box justifyContent="space-between"
-              onMouseDown={() => dispatch({ type: 'TOGGLE_FOLD', id: groupKey(entries, g) })}>
-              <Text color={live ? theme.accent : theme.assistant}>
-                {'● Agent'}
-                {gist ? <Text color={theme.system}> · {gist.slice(0, Math.max(4, paneColumns - 24))}</Text> : null}
-              </Text>
-              <Text dimColor>{meta}  ⌃</Text>
-            </Box>
-          ) : null}
-          {/* Ink has no single-side border: the rail is a 1-char column of │
-              sized to the group's visible height (same estimator the window
-              uses, same focus cap — keeps the rail exactly as tall as the body). */}
-          <Box flexDirection="row">
-            <Box width={1}>
-              <Text color={railColor}>
-                {Array.from(
-                  { length: railHeight(entries, view.expanded, from, to, paneColumns, paneHeight, agentRunning, entries[view.focusIndex]?.id) },
-                  () => '│',
-                ).join('\n')}
-              </Text>
-            </Box>
-            <Box flexDirection="column" flexGrow={1}>
-              {entries.slice(from, to).map((entry, i) => renderItem(entry, from + i, true))}
-            </Box>
-          </Box>
-        </Box>,
-      );
+    for (let i = win.startIndex; i < win.endIndex; i++) {
+      if (i > 0) out.push(<Text key={`sp-${i}`}>{' '}</Text>);
+      out.push(renderItem(entries[i]));
     }
     return out;
   };
@@ -494,6 +389,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
             ? (event: { scroll: { direction: string } }) => {
                 // Native wheel (replaces StdinMouseBridge): up = older (-1),
                 // down = newer (+1), one focus step per event like the bridge.
+                logTrace(`[mouse] wheel: ${event.scroll.direction}`);
                 const delta = event.scroll.direction === 'up' ? -1 : 1;
                 dispatchWheel(delta);
               }
@@ -506,7 +402,7 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         {/* Live streaming phases — subscribed to the StreamStore, so token
             deltas re-render only these panels, never the whole App. */}
         {agentRunning ? <ThinkingPanel columns={paneColumns} /> : null}
-        {agentRunning ? <ResponsePanel columns={paneColumns} /> : null}
+        {agentRunning ? <ResponsePanel columns={paneColumns} maxLines={responseCap} /> : null}
       </Box>
       {/* Reserved 1-line status strip — constant height, no reflow. */}
       <SpinnerStrip agentRunning={agentRunning} queuedCount={queuedCount} />
