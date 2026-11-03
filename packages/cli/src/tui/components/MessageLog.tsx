@@ -16,6 +16,7 @@ import MessageItem from './MessageItem.js';
 import { logViewReducer, createLogView, type LogView } from './logView/reducer.js';
 import { VISIBLE_BODY_BUDGET, renderedBodyLines, computeWindow } from './logView/estimator.js';
 import { copyToClipboard, entryClipboardText } from '../utils/clipboard.js';
+import { onSelectionCopy } from '../utils/selectionCopy.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
 import { useStreamStore } from './StreamProvider.js';
 import ThinkingPanel from './ThinkingPanel.js';
@@ -113,14 +114,29 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
 
   const [view, dispatch] = useReducer(logViewReducer, entries.length, createLogView);
 
-  // Transient feedback for the browse-mode `y` yank: shown on the pane
-  // header line for a moment, cleared on the next key or after a timeout.
-  const [yankStatus, setYankStatus] = useState('');
+  // Transient feedback for the browse-mode `y` yank and mouse-selection
+  // auto-copy: shown as a colored segment on the pane header line for a
+  // moment, cleared after a timeout. kind picks the theme color — success
+  // green for a copy, warning for a failure.
+  const [yankStatus, setYankStatus] = useState<{ text: string; kind: 'ok' | 'warn' } | null>(null);
   useEffect(() => {
     if (!yankStatus) return;
-    const t = setTimeout(() => setYankStatus(''), 2000);
+    const t = setTimeout(() => setYankStatus(null), 2000);
     return () => clearTimeout(t);
   }, [yankStatus]);
+
+  // Auto-copy on mouse selection (wired in render.tsx): the renderer-side
+  // listener copies the selected text and reports the counts here to show
+  // through the same transient status line.
+  useEffect(() =>
+    onSelectionCopy(({ chars, words, copied }) =>
+      setYankStatus(
+        copied
+          ? { text: `📋 selected ${chars} chars · ${words} words — copied`, kind: 'ok' }
+          : { text: `⚠ selected ${chars} chars · ${words} words — copy failed`, kind: 'warn' },
+      ),
+    ),
+  );
 
   // Reconcile focus when the entry list grows / shrinks. When the newly
   // appended entries contain a user message (sent or drained from the
@@ -271,7 +287,9 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
             const text = entryClipboardText(focused);
             const ok = copyToClipboard(text);
             setYankStatus(
-              ok ? `📋 copied ${text.length} chars` : '⚠ copy needs a TTY (stdout redirected)',
+              ok
+                ? { text: `📋 copied ${text.length} chars`, kind: 'ok' }
+                : { text: '⚠ copy needs a TTY (stdout redirected)', kind: 'warn' },
             );
           }
         } else if (isHome(input, key)) dispatch({ type: 'FOCUS_ABS', index: 0, length: n });
@@ -333,8 +351,12 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       ? `↑ ${win.linesAbove} above · ↓ ${win.linesBelow} below${view.autoFollow ? ' · following' : ''}`
       : '';
   const headerText = browseMode
-    ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · → expand · ← collapse · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}${yankStatus ? '  ·  ' + yankStatus : ''}`
+    ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · → expand · ← collapse · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}`
     : `${positionHint ? positionHint + '  ·  ' : ''}Ctrl+E expand · Ctrl+P to browse`;
+  // The copy/selection toast renders as its own colored segment (never dim)
+  // so it stands out from the header hints in both light and dark terminals.
+  const theme = getTheme();
+  const toastColor = yankStatus?.kind === 'warn' ? theme.warning : theme.success;
 
   // Render one entry card at its current expand/focus state.
   const renderItem = (entry: LogEntry): React.ReactNode => {
@@ -396,7 +418,12 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
             : undefined
         }
       >
-        <Text dimColor> {headerText}</Text>
+        {/* Header row: hints stay dim; the toast rides the same line in
+            theme colors so it never shifts the rows below while visible. */}
+        <Box flexDirection="row">
+          <Text dimColor> {headerText}</Text>
+          {yankStatus ? <Text color={toastColor}> {yankStatus.text}</Text> : null}
+        </Box>
         {renderChunks()}
         {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
         {/* Live streaming phases — subscribed to the StreamStore, so token

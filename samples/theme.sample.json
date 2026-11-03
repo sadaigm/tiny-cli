@@ -9,5 +9,12 @@
   "borderStatus": "cyan",
   "statusText": "cyan",
   "accent": "magenta",
-  "warning": "yellow"
+  "warning": "yellow",
+  "success": "greenBright",
+  "cardTool": "#191717",
+  "cardReasoning": "#3d3d49",
+  "cardAssistant": "#282626",
+  "cardUser": "#1d1d1d",
+  "cardFocused": "#2f2c2c",
+  "terminalBg": "#121212"
 }

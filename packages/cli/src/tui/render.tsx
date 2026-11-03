@@ -1,4 +1,10 @@
-import { createCliRenderer } from '@opentui/core';
+import {
+  createCliRenderer,
+  createClipboard,
+  createHostClipboard,
+  createRendererClipboardAdapter,
+  type Selection,
+} from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import type { Agent, SessionManager, Session, AgentConfig } from '@tiny-cli/core';
 import { setLogLevel, logError } from '@tiny-cli/core';
@@ -7,6 +13,7 @@ import { AppExitProvider } from './compat.js';
 import type { TuiMode } from './state.js';
 import { loadTheme, setTheme } from './theme.js';
 import { loadKeybindings, setKeybindings } from './keybindings.js';
+import { emitSelectionCopy } from './utils/selectionCopy.js';
 
 /**
  * Props passed from `index.ts` when booting the TUI.
@@ -89,6 +96,32 @@ export async function startTui(opts: StartTuiOptions): Promise<void> {
     clearOnShutdown: false,
   });
 
+  // Clipboard service: native pasteboard when local, OSC 52 fallback when
+  // remote (SSH/tmux). Auto-copies finished mouse selections — the same
+  // UX as tmux copy-mode — and reports counts to the MessageLog toast.
+  const clipboard = createClipboard({
+    host: createHostClipboard(),
+    terminal: createRendererClipboardAdapter(renderer),
+  });
+  renderer.on('selection', async (sel: Selection) => {
+    const text = sel.getSelectedText();
+    if (!text) return;
+    let copied = false;
+    try {
+      const result = await clipboard.writeText(text, { destination: 'best-available' });
+      // OSC 52 is fire-and-forget ("attempted"); the host backend reports
+      // a definite written/failed status.
+      copied = result.host.status === 'written' || result.terminal.status === 'attempted';
+    } catch {
+      copied = false;
+    }
+    emitSelectionCopy({
+      chars: text.length,
+      words: text.split(/\s+/).filter(Boolean).length,
+      copied,
+    });
+  });
+
   let resolveExit!: () => void;
   const exited = new Promise<void>((resolve) => {
     resolveExit = resolve;
@@ -100,6 +133,7 @@ export async function startTui(opts: StartTuiOptions): Promise<void> {
     try {
       root.unmount(); // stop React effects first
     } finally {
+      clipboard.dispose(); // stop the host-clipboard worker before teardown
       renderer.destroy(); // idempotent; restores terminal state
       resolveExit();
       // The terminal is restored and every effect is down — exit

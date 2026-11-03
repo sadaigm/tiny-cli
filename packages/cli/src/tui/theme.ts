@@ -46,6 +46,20 @@ export interface Theme {
   accent: string;
   /** Warning highlights (approval modal border, queue notices). */
   warning: string;
+  /** Success confirmations (copy/selection toasts). Bright enough for light and dark terminals. */
+  success: string;
+  /** Card background fills (chat-cards design): tool call/result cards. */
+  cardTool: string;
+  /** Card background fills: reasoning cards. */
+  cardReasoning: string;
+  /** Card background fills: assistant message cards. */
+  cardAssistant: string;
+  /** Card background fills: user message cards. */
+  cardUser: string;
+  /** Card background fill for the focused card (brighter than family shades). */
+  cardFocused: string;
+  /** Page background painted behind the whole TUI (root Box fill). */
+  terminalBg: string;
 }
 
 /**
@@ -68,6 +82,21 @@ export const DEFAULT_THEME: Theme = {
   statusText: 'whiteBright',
   accent: 'yellowBright',
   warning: 'yellow',
+  success: 'greenBright',
+  // Card fills: tinted shades of the dark-slate base, one per entry family
+  // (truecolor terminals render these exactly; 16-color terminals
+  // approximate). Kept bright enough to read as a fill against a dark
+  // terminal background — the 1-cell inner padding is only visible when
+  // the shade clearly separates from the page. Focused cards lift to a
+  // brighter neutral shade.
+  cardTool: '#191717',
+  cardReasoning: '#3d3d49',
+  cardAssistant: '#282626',
+  cardUser: '#1d1d1d',
+  cardFocused: '#2f2c2c',
+  // Page background: dark neutral the card fills sit on, so card contrast
+  // is theme-controlled rather than depending on the terminal emulator.
+  terminalBg: '#121212',
 };
 
 const THEME_FILE = path.join(os.homedir(), '.tiny-cli', 'theme.json');

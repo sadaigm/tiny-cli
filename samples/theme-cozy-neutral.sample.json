@@ -9,5 +9,12 @@
   "borderStatus": "#cb997e",
   "statusText": "#ddbea9",
   "accent": "#d4a373",
-  "warning": "#e9c46a"
+  "warning": "#e9c46a",
+  "success": "greenBright",
+  "cardTool": "#3f3a33",
+  "cardReasoning": "#38332c",
+  "cardAssistant": "#453d33",
+  "cardUser": "#40362c",
+  "cardFocused": "#5c5347",
+  "terminalBg": "#1c1913"
 }
