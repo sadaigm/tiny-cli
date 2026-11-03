@@ -396,15 +396,23 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   };
 
   return (
-    // Fixed height + overflow hidden: the pane is a stable viewport that
-    // never grows with its content. No flexGrow — the parent gives it an
-    // Fixed height + overflow hidden: the pane is a stable viewport that
-    // never grows with its content. No flexGrow — the parent gives it an
-    // exact row budget. computeWindow limits visibleEntries to fit.
-    <Box flexDirection="column">
+    // Fixed total height (header 1 + body + spinner 1 = maxHeight). The
+    // header stays pinned at top; the body is bottom-anchored (chat-app
+    // feel) so a short conversation hugs the spinner/input instead of
+    // leaving blank rows between the last card and the strip — the empty
+    // region, if any, sits between header and first card. computeWindow
+    // still budgets entries against the same paneHeight.
+    <Box flexDirection="column" height={maxHeight ?? terminalRows}>
+      {/* Header row: hints stay dim; the toast rides the same line in
+          theme colors so it never shifts the rows below while visible. */}
+      <Box flexDirection="row">
+        <Text dimColor> {headerText}</Text>
+        {yankStatus ? <Text color={toastColor}> {yankStatus.text}</Text> : null}
+      </Box>
       <Box
         flexDirection="column"
-        height={paneHeight}
+        flexGrow={1}
+        justifyContent="flex-end"
         overflowY="hidden"
         onMouseScroll={
           mouseEnabled
@@ -418,12 +426,6 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
             : undefined
         }
       >
-        {/* Header row: hints stay dim; the toast rides the same line in
-            theme colors so it never shifts the rows below while visible. */}
-        <Box flexDirection="row">
-          <Text dimColor> {headerText}</Text>
-          {yankStatus ? <Text color={toastColor}> {yankStatus.text}</Text> : null}
-        </Box>
         {renderChunks()}
         {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
         {/* Live streaming phases — subscribed to the StreamStore, so token
