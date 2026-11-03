@@ -26,6 +26,18 @@ export function pasteChipText(id: number, lineCount: number): string {
 }
 
 /**
+ * Pastes at or under this length are inserted verbatim instead of being
+ * collapsed into a chip — a short word or line is easier to read (and edit)
+ * as itself, and at this size it can't flood the editor.
+ */
+export const SHORT_PASTE_LIMIT = 80;
+
+/** True when a paste is short enough to insert as-is (no chip). */
+export function isShortPaste(text: string): boolean {
+  return text.length <= SHORT_PASTE_LIMIT;
+}
+
+/**
  * Normalise paste line endings to `\n`.
  *
  * Pastes can arrive with `\n`, `\r\n` (Windows), or bare `\r` (classic Mac /

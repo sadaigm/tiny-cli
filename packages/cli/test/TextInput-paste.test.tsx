@@ -21,20 +21,23 @@ import {
   pasteChipText,
   countLines,
   expandPasteChips,
+  isShortPaste,
   normalizeLineEndings,
 } from '../src/tui/utils/pasteChip.js';
 
 /**
- * Reproduces InputBox.handlePaste's contract: normalise line endings, store the
- * paste keyed by an incrementing id, return the chip token, and keep a map for
- * later expansion. This is the exact logic in InputBox (minus React state), so
- * the test exercises the real chip-creation + expansion path end to end.
+ * Reproduces InputBox.handlePaste's contract: normalise line endings, insert
+ * short pastes verbatim, otherwise store the paste keyed by an incrementing
+ * id and return the chip token, keeping a map for later expansion. This is
+ * the exact logic in InputBox (minus React state), so the test exercises the
+ * real chip-creation + expansion path end to end.
  */
 function simulatePastePayloads() {
   const pastes = new Map<number, string>();
   let nextId = 0;
   const handlePaste = (text: string): string => {
     const normalized = normalizeLineEndings(text);
+    if (isShortPaste(normalized)) return normalized;
     nextId += 1;
     const id = nextId;
     pastes.set(id, normalized);
@@ -50,8 +53,9 @@ describe('paste → chip → expand', () => {
   it('collapses a multi-line paste into a chip and never leaks markers', () => {
     const { handlePaste } = simulatePastePayloads();
     // The payload Ink's usePaste delivers — markers already stripped.
-    const chip = handlePaste('line one\nline two\nline three');
-    expect(chip).toBe('[pasted text #1 +3 lines]');
+    const payload = 'line one\nline two\nline three\n' + 'x'.repeat(70);
+    const chip = handlePaste(payload);
+    expect(chip).toBe('[pasted text #1 +4 lines]');
     // No raw payload, no bracketed-paste markers in the chip.
     expect(chip).not.toContain('[201~');
     expect(chip).not.toContain('line two');
@@ -59,23 +63,31 @@ describe('paste → chip → expand', () => {
 
   it('expands the chip back to the verbatim pasted text', () => {
     const { handlePaste, expand } = simulatePastePayloads();
-    const payload = 'line one\nline two\nline three';
+    const payload = 'line one\nline two\nline three\n' + 'x'.repeat(70);
     const chip = handlePaste(payload);
     expect(expand(chip)).toBe(payload);
   });
 
-  it('handles a single-line paste (singular "line")', () => {
+  it('handles a long single-line paste (singular "line")', () => {
     const { handlePaste } = simulatePastePayloads();
-    expect(handlePaste('just one line')).toBe('[pasted text #1 +1 line]');
+    const longLine = 'x'.repeat(81);
+    expect(handlePaste(longLine)).toBe('[pasted text #1 +1 line]');
+  });
+
+  it('inserts short pastes verbatim instead of a chip', () => {
+    const { handlePaste } = simulatePastePayloads();
+    // Single word, and a short multi-line paste: both read better as-is.
+    expect(handlePaste('verbatim')).toBe('verbatim');
+    expect(handlePaste('one\ntwo')).toBe('one\ntwo');
   });
 
   it('keeps multiple pastes distinct (incrementing ids + separate expansion)', () => {
     const { handlePaste, expand } = simulatePastePayloads();
-    const chip1 = handlePaste('first\npaste');
-    const chip2 = handlePaste('second paste');
-    expect(chip1).toBe('[pasted text #1 +2 lines]');
+    const chip1 = handlePaste('first\npaste\n' + 'x'.repeat(80));
+    const chip2 = handlePaste('second paste '.repeat(10));
+    expect(chip1).toBe('[pasted text #1 +3 lines]');
     expect(chip2).toBe('[pasted text #2 +1 line]');
-    expect(expand(chip1)).toBe('first\npaste');
-    expect(expand(chip2)).toBe('second paste');
+    expect(expand(chip1)).toBe('first\npaste\n' + 'x'.repeat(80));
+    expect(expand(chip2)).toBe('second paste '.repeat(10));
   });
 });

@@ -31,14 +31,16 @@ export function wrappedLineCount(text: string, usable: number): number {
     .reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / usable)), 0);
 }
 
-/** Card entry types: collapsed = header + one ellipsized body line. */
+/** Card entry types: collapsed = header + body (single line, except the
+ * capped families — assistant and shell — see estimateLines). */
 function isCardType(entry: LogEntry): boolean {
   return (
     entry.type === 'tool_call' ||
     entry.type === 'tool_result' ||
     entry.type === 'reasoning' ||
     entry.type === 'assistant' ||
-    entry.type === 'user'
+    entry.type === 'user' ||
+    entry.type === 'shell'
   );
 }
 
@@ -69,7 +71,8 @@ function totalBodyLines(entry: LogEntry, columns: number): number {
  * - Cards (user / assistant / tool / reasoning): 1 header row + 1 body line
  *   when collapsed; 1 header row + the full body (from the same source the
  *   renderer draws: toolViews / markdownToLines) when expanded.
- * - system / info / error / shell: capped wrapped body when collapsed.
+ * - system / info / error: capped wrapped body when collapsed; shell renders
+ *   as a card whose collapsed body is capped at MAX_STANDARD_BODY_LINES.
  */
 export function estimateLines(entry: LogEntry, columns: number, expanded: Set<string>, agentRunning = false, lineCap?: number): number {
   // Defensive: a malformed entry (null/undefined, or missing `type`/`content`)
@@ -85,6 +88,7 @@ export function estimateLines(entry: LogEntry, columns: number, expanded: Set<st
     let bodyLines: number;
     if (entry.type === 'reasoning') bodyLines = entry.live || isOpen ? total : Math.min(total, 1);
     else if (entry.type === 'assistant') bodyLines = isOpen ? total : Math.min(total, MAX_ASSISTANT_BODY_LINES);
+    else if (entry.type === 'shell') bodyLines = isOpen ? total : Math.min(total, MAX_STANDARD_BODY_LINES);
     else bodyLines = isOpen ? total : Math.min(total, 1);
     if (lineCap !== undefined) bodyLines = Math.min(bodyLines, lineCap);
     // +1 header row +1 inner bottom padding row (see Card/UserCard).
@@ -111,6 +115,7 @@ export function renderedBodyLines(entry: LogEntry, columns: number, expanded: Se
   if (isCardType(entry)) {
     if (entry.type === 'reasoning') return entry.live || isOpen ? total : Math.min(total, 1);
     if (entry.type === 'assistant') return isOpen ? total : Math.min(total, MAX_ASSISTANT_BODY_LINES);
+    if (entry.type === 'shell') return isOpen ? total : Math.min(total, MAX_STANDARD_BODY_LINES);
     return isOpen ? total : Math.min(total, 1);
   }
   return isOpen ? total : Math.min(total, MAX_STANDARD_BODY_LINES);

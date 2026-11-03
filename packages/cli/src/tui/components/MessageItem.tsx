@@ -13,6 +13,7 @@ import { markdownToLines } from '../utils/markdown.js';
 import MarkdownBody from './MarkdownBody.js';
 import { toolView, type SpecLine } from './toolViews/index.js';
 import { getTheme } from '../theme.js';
+import ShellCard from './ShellCard.js';
 
 /**
  * Maximum rendered body lines for a standard (non-card) entry when
@@ -366,7 +367,8 @@ function mdLineText(line: { spans: { text: string }[] } | undefined): string {
  * and assistant render as borderless background-shaded cards — fixed
  * collapsed height (header + one ellipsized body line + dim `+N lines`
  * hint, ⌄/⌃ chevron toggles), auto-height when expanded. Each family gets
- * its own shade fill. system/info/shell/error/plan stay plain dim lines.
+ * its own shade fill. system/info/error/plan stay plain dim lines; shell
+ * output renders as a card too (see the shell branch below).
  *
  * @example
  * ```tsx
@@ -465,7 +467,7 @@ export default function MessageItem({
   // Plan banners stay theme-accented in the body (not dimmed gray) so the
   // current task is always visually distinct while a plan executes.
   const bodyColor =
-    entry.type === 'error' ? 'red' : entry.type === 'system' || entry.type === 'info' || entry.type === 'shell' ? 'gray' : entry.type === 'plan' ? color : undefined;
+    entry.type === 'error' ? 'red' : entry.type === 'system' || entry.type === 'info' ? 'gray' : entry.type === 'plan' ? color : undefined;
 
   // --- User message card: `❯ You` header + markdown body, right-aligned
   // (UserCard — mirrored against the left-anchored agent cards). ---
@@ -526,13 +528,39 @@ export default function MessageItem({
     );
   }
 
-  // --- Plain entries (system / info / shell / error / plan): dim wrapped
+  // --- Shell output card (bang-mode `! cmd`): tool-card chrome with the
+  // dim gray body. Collapsed shows up to MAX_STANDARD_BODY_LINES lines
+  // (command output is the point of the entry), expandable via the same
+  // toggle as every other card. ---
+  if (entry.type === 'shell') {
+    const fullBody = wrapIndent(entry.content, 2, cardCols);
+    const fullLines = fullBody.split('\n');
+    const shown = expanded ? fullLines : fullLines.slice(0, MAX_STANDARD_BODY_LINES);
+    const hidden = fullLines.length - shown.length;
+    return (
+      <ShellCard
+        background={bg ?? theme.cardShell}
+        color={color}
+        right={!expanded && hidden > 0 ? `+${hidden} lines` : ''}
+        expanded={expanded}
+        expandable={fullLines.length > MAX_STANDARD_BODY_LINES}
+        columns={cardCols}
+        onToggle={onToggle}
+      >
+        <Box marginLeft={2} flexDirection="column">
+          {renderBodyWithLinks(clip(shown.join('\n')), 'gray')}
+        </Box>
+      </ShellCard>
+    );
+  }
+
+  // --- Plain entries (system / info / error / plan): dim wrapped
   // body, capped at MAX_STANDARD_BODY_LINES when collapsed. ---
   const fullBody = wrapIndent(entry.content, 3, columns);
   const fullLines = fullBody.split('\n');
   let body = clip(fullBody);
   let hiddenHint = '';
-  const cappedType = entry.type === 'system' || entry.type === 'info' || entry.type === 'error' || entry.type === 'shell';
+  const cappedType = entry.type === 'system' || entry.type === 'info' || entry.type === 'error';
   if (cappedType && !expanded && fullLines.length > MAX_STANDARD_BODY_LINES) {
     body = fullLines.slice(0, MAX_STANDARD_BODY_LINES).join('\n');
     hiddenHint = `  ⤤ +${fullLines.length - MAX_STANDARD_BODY_LINES} lines`;

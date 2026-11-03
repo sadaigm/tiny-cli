@@ -9,6 +9,7 @@ import { usePickers } from './input/usePickers.js';
 import { useHistorySearch } from './input/useHistorySearch.js';
 import { useInputSubmit } from './input/useInputSubmit.js';
 import {
+  isShortPaste,
   pasteChipText,
   countLines,
   normalizeLineEndings,
@@ -217,12 +218,13 @@ function InputBox({
   } = usePickers({ fileIndex, onSubmit, setValue, setCursorEndSignal });
 
   /**
-   * Handle a paste: store the raw text and append a readable chip token to the
-   * input. We bypass {@link handleChange} (no `@`/`/` picker detection) because
-   * a pasted blob shouldn't open a picker. The chip is expanded back to the raw
-   * text on submit via {@link expandPasteChips}.
+   * Handle a paste: short pastes (see {@link isShortPaste}) are inserted
+   * verbatim; longer ones are stored raw and appended as a readable chip
+   * token. We bypass {@link handleChange} (no `@`/`/` picker detection)
+   * because a pasted blob shouldn't open a picker. The chip is expanded back
+   * to the raw text on submit via {@link expandPasteChips}.
    *
-   * The chip is appended at the end of the current value. Cursor-accurate
+   * The paste is appended at the end of the current value. Cursor-accurate
    * mid-string paste insertion would require lifting the cursor offset out of
    * TextInput; pastes almost always happen at line-end, so this matches the
    * common case.
@@ -238,6 +240,15 @@ function InputBox({
     // bare \r overstrikes when the expanded text is later printed. Storing \n
     // keeps the content semantically identical but display-safe.
     const normalized = normalizeLineEndings(text);
+    // Short pastes go in as-is: a word or a short line reads better verbatim
+    // than as a chip, and TextInput already handles multi-line drafts.
+    if (isShortPaste(normalized)) {
+      setValue((prev) => prev + normalized);
+      setCursorEndSignal((n) => n + 1);
+      setSlashActive(false);
+      setMentionActive(false);
+      return;
+    }
     pasteIdRef.current += 1;
     const id = pasteIdRef.current;
     pastesRef.current.set(id, normalized);

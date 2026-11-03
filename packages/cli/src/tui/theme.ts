@@ -56,6 +56,8 @@ export interface Theme {
   cardAssistant: string;
   /** Card background fills: user message cards. */
   cardUser: string;
+  /** Card background fills: shell output cards (bang-mode `! cmd`). */
+  cardShell: string;
   /** Card background fill for the focused card (brighter than family shades). */
   cardFocused: string;
   /** Page background painted behind the whole TUI (root Box fill). */
@@ -93,6 +95,7 @@ export const DEFAULT_THEME: Theme = {
   cardReasoning: '#3d3d49',
   cardAssistant: '#282626',
   cardUser: '#1d1d1d',
+  cardShell: '#161c22',
   cardFocused: '#2f2c2c',
   // Page background: dark neutral the card fills sit on, so card contrast
   // is theme-controlled rather than depending on the terminal emulator.
