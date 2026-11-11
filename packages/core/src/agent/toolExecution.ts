@@ -95,9 +95,22 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
   // history plus a within-batch set (blocking duplicate same-batch
   // calls, matching the previous sequential behavior).
   // ----------------------------------------------------------------
+  // Only count steps that actually executed (not redirects/blocks/denials)
+  // as dedup baseline — a blocked command never ran, so re-issuing it is
+  // not redundant.
+  const NON_EXEC_PREFIXES = [
+    'TOOL REDIRECT:',
+    'WORKSPACE BOUNDARY:',
+    'Error: User denied',
+    'Error: You already called',
+  ];
   const preBatchKeys = new Set(
     steps
       .filter(s => s.toolCall)
+      .filter(s => {
+        const r = s.toolResult ?? '';
+        return !NON_EXEC_PREFIXES.some(p => r.startsWith(p));
+      })
       .map(s => `${s.toolCall!.function.name}:${s.toolCall!.function.arguments}`)
   );
   const seenInBatch = new Set<string>();
@@ -152,9 +165,14 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
       } catch {
         parsedArgs = {};
       }
+      // Use the target-side root as the boundary anchor for lock-key
+      // classification when an exec-target profile is active, so path-based
+      // mutex keys are computed against the container/remote path space
+      // instead of the local host cwd.
+      const cwdForLock = config.execTarget?.root ?? process.cwd();
       const lockKey = classifyLockKey(call.function.name, parsedArgs, {
         sessionId: config.sessionId,
-        cwd: process.cwd(),
+        cwd: cwdForLock,
       });
       plan.push({ index: i, call, kind: "EXEC", lockKey });
     }
@@ -165,7 +183,13 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
   // ----------------------------------------------------------------
   const gate = new MutationGate();
   const pathMutex = new MutexMap();
-  const execContext = { sessionId: config.sessionId, cwd: process.cwd(), askUser: onAskUser, securedMode: config.securedMode !== false, execTarget: config.execTarget, profileName: config.profileName };
+  // Exec-target profiles: use the target-side root as the tool context cwd
+  // so that every tool that inspects context.cwd (boundary checks, lock
+  // keys, path resolution) operates against the container/remote path space
+  // instead of the local host cwd. For local profiles, process.cwd() is
+  // correct and unchanged.
+  const effectiveCwd = config.execTarget?.root ?? process.cwd();
+  const execContext = { sessionId: config.sessionId, cwd: effectiveCwd, askUser: onAskUser, securedMode: config.securedMode !== false, execTarget: config.execTarget, profileName: config.profileName };
 
   // Execution windows [start, end] per entry index, used to report
   // observed concurrency for this batch.
@@ -191,8 +215,15 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
       }
       if (entry.call.function.name.startsWith("mcp__")) {
         result = await mcpManager.callTool(entry.call.function.name, parsedArgs);
-      } else {
+      } else if (toolDefinitions.some(d => d.name === entry.call.function.name)) {
+        // Only run built-ins the model was actually offered. Small local models
+        // occasionally emit a call for a tool that was filtered out of the
+        // current list (e.g. `write` in a bash-only container profile); the
+        // registry still has it registered, so without this guard it would
+        // execute anyway.
         result = await registry.call(entry.call.function.name, parsedArgs, ctx);
+      } else {
+        result = `Error: Tool "${entry.call.function.name}" is not available in this mode. Use one of the provided tools.`;
       }
     } catch (error: any) {
       result = `Tool Error: ${error.message}`;

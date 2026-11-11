@@ -266,7 +266,12 @@ export async function loadConfig(): Promise<AgentConfig> {
   // (container: bind-mount source; remote: explicit hostRoot). Unresolvable
   // root → hostRoot stays unset → file tools block ("Use bash.") at runtime.
   if (config.execTarget) {
-    const { resolveHostRoot } = await import('@tiny-cli/core');
+    const { resolveHostRoot, detectContainerShell } = await import('@tiny-cli/core');
+    // Auto-detect the container shell when the user didn't specify one.
+    if (config.execTarget.kind === 'container' && !config.execTarget.shell) {
+      const shell = await detectContainerShell(config.execTarget.container);
+      if (shell) config.execTarget = { ...config.execTarget, shell };
+    }
     const pair = await resolveHostRoot(config.execTarget);
     if (pair) config.execTarget = { ...config.execTarget, root: pair.root, hostRoot: pair.hostRoot };
   }

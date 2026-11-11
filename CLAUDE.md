@@ -4,6 +4,18 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## Workspace Map & Routing (Read First)
+
+Before exploring or opening files across the repository, **ALWAYS read the relevant router map first** to pinpoint the exact file needed rather than listing or reading full directories:
+
+| Area | Router File | Description |
+| :--- | :--- | :--- |
+| **Product & Code** | [`product.md`](file:///Users/sadaiyandi/Documents/development/github/tiny-cli/product.md) | Core product logic, agent loop, LLM clients, tool implementations, and CLI/TUI. |
+| **Operations & Infra** | [`operations.md`](file:///Users/sadaiyandi/Documents/development/github/tiny-cli/operations.md) | Build scripts, Docker containers, CI/CD, deployment, and configuration samples. |
+| **Content & Docs** | [`content.md`](file:///Users/sadaiyandi/Documents/development/github/tiny-cli/content.md) | User guides, architecture specs, release docs, installation guides, and licenses. |
+
+**Routing Rule**: First open the matching router file (`product.md`, `operations.md`, or `content.md`), locate the specific file path and one-liner explanation, and then open only that targeted file.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**

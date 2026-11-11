@@ -55,6 +55,7 @@ import {
   DENIED_MSG,
   REDUNDANCY_MSG,
 } from "./agent/toolExecution.js";
+import { adaptToolDescriptions } from "./tools/execTarget.js";
 
 export class Agent {
   private model: ModelClient;
@@ -150,10 +151,35 @@ export class Agent {
       systemPrompt = this.config.prompts?.agent ?? AGENT_SYSTEM_PROMPT;
     }
 
-    // Replace template variables
+    // Replace template variables.
+    // IMPORTANT: when an exec-target profile is active the model's working
+    // directory is the TARGET-side root (container/remote path), NOT the local
+    // host cwd. Substituting the host cwd here leaks it to the model and
+    // causes it to generate host-side absolute paths for all file operations —
+    // the core bug where the model writes to "/Users/..." instead of the
+    // container path. Use the target root when present.
+    const effectiveCwd = this.config.execTarget?.root ?? process.cwd();
     systemPrompt = systemPrompt
-      .replace("${process.cwd()}", process.cwd())
+      .replace("${process.cwd()}", effectiveCwd)
       .replace("${process.platform()}", process.platform);
+
+    // Exec-target profiles: inject a clear context block so the model knows
+    // it is operating inside a container/remote host and must use target-side
+    // paths exclusively.
+    if (this.config.execTarget) {
+      const t = this.config.execTarget;
+      const targetDesc =
+        t.kind === 'container'
+          ? `Docker container: ${t.container}`
+          : `Remote host (ssh): ${t.host}`;
+      const rootDesc = t.root
+        ? `Working directory inside target: ${t.root}`
+        : `No root configured (bash-only mode — file tools are unavailable).`;
+      systemPrompt +=
+        `\n\nEXECUTION TARGET: ${targetDesc}. ${rootDesc}` +
+        ` All bash commands and file operations execute INSIDE this target,` +
+        ` not on the local host. Never use or reference the local host path.`;
+    }
 
     // Announce the per-response output cap so the agent can plan around it:
     // without knowing the limit it emits one oversized write/payload that gets
@@ -312,9 +338,15 @@ GUIDANCE FOR PLAN EXECUTION:
       }
 
       iteration++;
+      // Container exec target with no host mapping is bash-only: strip the
+      // file tools (they can't reach the container's files) from the list sent
+      // to the model. Local and mapped profiles keep the full set.
+      const bashOnly = !!this.config.execTarget && !this.config.execTarget.hostRoot;
+      const defaultTools : ToolDefinition []= this.registry.getDefinitions({ excludeFileTools: bashOnly }) || [];
+       logDebug(`[trace] defaultTools: name=${defaultTools.map(t => t.name)} `);
 
       let toolDefinitions = [
-        ...this.registry.getDefinitions(),
+        ...defaultTools,
         ...this.mcpManager.getDefinitions()
       ];
       
@@ -337,6 +369,14 @@ GUIDANCE FOR PLAN EXECUTION:
           }
         }
       }
+
+      // Adapt tool descriptions to match the active execution context.
+      // The registry always holds the generic (local-mode) descriptions;
+      // this rewrites only the tools whose descriptions meaningfully differ
+      // when running against a docker container or ssh remote host — currently
+      // just `bash`, whose redirect/boundary rules don't apply in exec-target
+      // mode. Local profiles return the array unchanged.
+      toolDefinitions = adaptToolDescriptions(toolDefinitions, this.config.execTarget);
 
       const modelStart = performance.now();
       let response;

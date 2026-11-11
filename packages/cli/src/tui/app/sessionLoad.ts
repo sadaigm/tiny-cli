@@ -19,7 +19,11 @@ export async function applySessionProfile(
   if (!profile) return;
   const next = profileToConfig(profile, await isProjectTrusted());
   if (next.execTarget) {
-    const { resolveHostRoot } = await import('@tiny-cli/core');
+    const { resolveHostRoot, detectContainerShell } = await import('@tiny-cli/core');
+    if (next.execTarget.kind === 'container' && !next.execTarget.shell) {
+      const shell = await detectContainerShell(next.execTarget.container);
+      if (shell) next.execTarget = { ...next.execTarget, shell };
+    }
     const pair = await resolveHostRoot(next.execTarget);
     if (pair) next.execTarget = { ...next.execTarget, root: pair.root, hostRoot: pair.hostRoot };
   }

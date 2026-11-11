@@ -390,7 +390,9 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     const out: React.ReactNode[] = [];
     for (let i = win.startIndex; i < win.endIndex; i++) {
       if (i > 0) out.push(<Text key={`sp-${i}`}>{' '}</Text>);
-      out.push(renderItem(entries[i]));
+      if(entries[i]){
+        out.push(renderItem(entries[i]));
+      }
     }
     return out;
   };

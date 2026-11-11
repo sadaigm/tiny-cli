@@ -16,6 +16,26 @@ export type ToolContext = {
 
 export type ToolHandler = (args: any, context?: ToolContext) => Promise<string>;
 
+/**
+ * Built-in tools that read/write files on the host filesystem. When an exec
+ * target is a container with no resolvable host mapping (bash-only profile),
+ * these cannot reach the container's files and are stripped from the tool list
+ * sent to the model — bash remains the only way to touch container files.
+ */
+export const FILE_TOOLS = [
+  'read',
+  'search_replace',
+  'insert_lines',
+  'write',
+  'create_skill',
+  'list',
+  'grep',
+  'glob',
+  'plan_write',
+  'manage_tasks',
+  'memory',
+] as const;
+
 export interface RegisteredTool {
   definition: ToolDefinition;
   handler: ToolHandler;
@@ -30,8 +50,16 @@ export class ToolRegistry {
     this.tools.set(definition.name, { definition, handler });
   }
 
-  getDefinitions(): ToolDefinition[] {
-    return Array.from(this.tools.values()).map(t => t.definition);
+  /**
+   * Built-in tool definitions, optionally excluding the file tools. Pass
+   * `excludeFileTools: true` for a container exec target with no host mapping
+   * (bash-only profile) so the model can't be offered tools that can't reach
+   * the container's files.
+   */
+  getDefinitions(options?: { excludeFileTools?: boolean }): ToolDefinition[] {
+    const all = Array.from(this.tools.values()).map(t => t.definition);
+    if (!options?.excludeFileTools) return all;
+    return all.filter(d => !(FILE_TOOLS as readonly string[]).includes(d.name));
   }
 
   getUsageStats(): Record<string, number> {

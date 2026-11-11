@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import path from 'path';
-import type { ExecTarget } from '../types.js';
+import type { ExecTarget, ToolDefinition } from '../types.js';
 import type { ToolContext } from './registry.js';
 
 /** Single-quote wrap for embedding a command in a shell -c string:
@@ -13,11 +13,15 @@ export function sq(cmd: string): string {
  *  No `-t` anywhere — output pipes must stay clean for capture. */
 export function wrapBashCmd(target: ExecTarget, cmd: string): string {
   const shell = target.shell ?? '/bin/bash';
+
   switch (target.kind) {
     // Container: run inside the container via its shell; -i (no -t) keeps the
     // output pipe clean for capture.
-    case 'container':
-      return `docker exec -i ${target.container} ${shell} -c ${sq(cmd)}`;
+    case 'container': {
+      let dockerFolder = target.root ? `-w ${target.root} `: '';
+      return `docker exec -i ${dockerFolder} ${target.container} ${shell} -c ${sq(cmd)}`;
+    }
+      
     // Remote: run on the ssh host; host is passed verbatim so ~/.ssh/config
     // (User/Port/ProxyJump) applies. sq() keeps the command one argument.
     case 'remote':
@@ -129,6 +133,21 @@ function execProbe(cmd: string, timeoutMs: number): Promise<string> {
   });
 }
 
+/** Probe the container for an available shell. Tries /bin/bash first,
+ *  falls back to /bin/sh. Returns the shell path or undefined when neither
+ *  exists (caller should refuse the switch). */
+export async function detectContainerShell(container: string): Promise<string | undefined> {
+  for (const shell of ['/bin/bash', '/bin/sh']) {
+    try {
+      await execProbe(`docker exec -i ${container} ${shell} -c 'echo ok'`, 10_000);
+      return shell;
+    } catch {
+      // shell not available — try the next one
+    }
+  }
+  return undefined;
+}
+
 /** Fail-fast check at profile load / switch: schema first, then a live probe
  *  (container exists and is running / ssh host reachable passwordlessly).
  *  Throws with the failing check; the caller refuses the switch. */
@@ -172,4 +191,58 @@ export async function validateExecTarget(target: ExecTarget): Promise<void> {
     // auth specifically instead of hanging on a password prompt.
     await execProbe(`ssh -o BatchMode=yes ${target.host} echo ok`, 15_000);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-dispatch tool-description adaptation
+// ---------------------------------------------------------------------------
+
+/** Exec-target description for the bash tool — replaces the generic registry
+ *  description when the tool list is sent to the model in exec-target mode.
+ *  The model must know it is NOT on the local host so it uses container/remote
+ *  paths freely and does not expect the redirect/boundary guards. */
+function bashDescriptionForExecTarget(target: ExecTarget): string {
+  const where =
+    target.kind === 'container'
+      ? `Docker container "${target.container}"`
+      : `remote host "${target.host}" (ssh)`;
+  const root = target.root ? ` Working directory: ${target.root}.` : '';
+  return [
+    `Execute a shell command inside the ${where}.${root}`,
+    '',
+    'How to use:',
+    '1. Provide a single `cmd` string. It may chain multiple commands with && ; and pipes |.',
+    '2. The FULL combined stdout+stderr is returned, even if a segment exits non-zero.',
+    '3. Non-zero exit is NOT treated as a tool failure — read the output to judge success.',
+    '',
+    'EXECUTION ENVIRONMENT: commands run INSIDE the target, not on the local host.',
+    'Use target-side paths (e.g. ' + (target.root ?? '/app') + '/...). Never reference',
+    'local host paths. All shell operations (echo >, tee, cp, mv, mkdir, ...) execute',
+    'directly — there are no redirect or workspace-boundary intercepts in this mode.',
+    'The target environment is its own sandbox.',
+    '',
+    'This is a mutating tool (guarded by the permission system).',
+  ].join('\n');
+}
+
+/**
+ * Rewrite any tool descriptions that need to differ between local and
+ * exec-target mode. Called in agent.ts right after mode-based filtering,
+ * before the tool list is sent to the model.
+ *
+ * Local profiles (execTarget === undefined): returns the array unchanged.
+ * Exec-target profiles: replaces the `bash` description with one that
+ *   accurately describes the container/remote execution context.
+ */
+export function adaptToolDescriptions(
+  tools: ToolDefinition[],
+  execTarget: ExecTarget | undefined,
+): ToolDefinition[] {
+  if (!execTarget) return tools; // local mode — no changes
+  return tools.map((t) => {
+    if (t.name === 'bash') {
+      return { ...t, description: bashDescriptionForExecTarget(execTarget) };
+    }
+    return t;
+  });
 }

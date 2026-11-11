@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import type { Agent, Session } from '@tiny-cli/core';
-import { SessionManager, logInfo, logError, validateExecTarget, resolveHostRoot } from '@tiny-cli/core';
+import { SessionManager, logInfo, logError, validateExecTarget, resolveHostRoot, detectContainerShell } from '@tiny-cli/core';
 import type { TuiState } from '../state.js';
 import type { MessageLogHandle } from '../components/MessageLog.js';
 import type { UseAgentApi } from '../hooks/useAgent.js';
@@ -248,10 +248,22 @@ export function createSlashCommands({
               // blocked per the design's block rule, never silently mapped
               // onto an unrelated local directory.
               if (next.execTarget) {
+                // Auto-detect the container shell when the user didn't specify one.
+                if (next.execTarget.kind === 'container' && !next.execTarget.shell) {
+                  const shell = await detectContainerShell(next.execTarget.container);
+                  if (shell) {
+                    next.execTarget = { ...next.execTarget, shell };
+                    logInfo(`[profile] auto-detected container shell: ${shell}`);
+                  } else {
+                    logError(`[profile] no usable shell found in container "${next.execTarget.container}" (tried /bin/bash, /bin/sh)`);
+                    addErrorLog(`Profile switch refused: no usable shell in container (tried /bin/bash, /bin/sh). Set "shell" in your exec config.`);
+                    return;
+                  }
+                }
                 const pair = await resolveHostRoot(next.execTarget);
                 if (pair) next.execTarget = { ...next.execTarget, root: pair.root, hostRoot: pair.hostRoot };
                 else if (next.execTarget.root) {
-                  logError(`[profile] exec root ${next.execTarget.root} has no host mapping — file tools blocked (bash-only)`);
+                  logInfo(`[profile] exec root ${next.execTarget.root} has no host mapping — file tools blocked (bash-only)`);
                   const kind = next.execTarget.kind === 'container' ? next.execTarget.container : next.execTarget.host;
                   addErrorLog(`Note: ${next.execTarget.root} is not a folder bind-mounted into ${kind} — file tools are blocked; use bash. Hint: "root" is the HOST-side mounted folder; tiny-cli finds where it lives inside the container via its bind mounts.`);
                 }

@@ -49,33 +49,31 @@ export function register(registry: ToolRegistry) {
     if (typeof command !== 'string' || !command.trim()) {
       return 'Tool error: cmd must be a shell command string.';
     }
-    // Runtime tool-routing enforcement: a plain cat/grep/find/ls/sed/echo>
-    // duplicates a dedicated tool (and sed -i / echo > mutate files invisibly),
-    // so refuse it with a redirect instead of executing.
-    const redirectResult = checkBashRedirect(command);
-    if (redirectResult) {
-      recordRedirectCount(redirectResult.key);
-      logDebug(`[tool-redirect] ${redirectResult.key}: ${command.trim()}`);
-      return redirectResult.message;
-    }
-    // Workspace boundary enforcement: file operations stay inside the
-    // project folder; toolchain binaries execute but never read as data;
-    // credentials hard-block; git identity needs user consent.
-    if (context?.securedMode !== false) {
-      // Boundary anchor: local profiles anchor to the host project dir.
-      // Exec-target profiles anchor to the TARGET's path space instead — the
-      // model's commands carry container/remote paths (/data/...), which are
-      // meaningless against the host cwd (they'd all look "outside" and be
-      // blocked). With a root, confinement is the target workspace; without
-      // one (bash-only), the container/host itself is the sandbox, so no
-      // path confinement beyond the other boundary rules.
-      const boundaryRoot = context?.execTarget
-        ? (context.execTarget.root ?? '/')
-        : (context?.cwd || process.cwd());
-      const boundary = await checkBashBoundary(command, boundaryRoot, context?.askUser);
-      if (boundary) {
-        logDebug(`[bash-guard] ${boundary.key}: ${command.trim()}`);
-        return boundary.message;
+    // When executing inside an exec target (Docker container or remote SSH host),
+    // the target environment IS the sandbox. Skip host-side tool redirects (which
+    // route shell writes like `echo >` to `write`, a tool that may not exist in bash-only mode)
+    // and skip host-side workspace boundary checks (which incorrectly evaluate container paths
+    // like /app/... against host paths or toolchain paths).
+    if (!context?.execTarget) {
+      // Runtime tool-routing enforcement: a plain cat/grep/find/ls/sed/echo>
+      // duplicates a dedicated tool (and sed -i / echo > mutate files invisibly),
+      // so refuse it with a redirect instead of executing.
+      const redirectResult = checkBashRedirect(command);
+      if (redirectResult) {
+        recordRedirectCount(redirectResult.key);
+        logDebug(`[tool-redirect] ${redirectResult.key}: ${command.trim()}`);
+        return redirectResult.message;
+      }
+      // Workspace boundary enforcement: file operations stay inside the
+      // project folder; toolchain binaries execute but never read as data;
+      // credentials hard-block; git identity needs user consent.
+      if (context?.securedMode !== false) {
+        const boundaryRoot = context?.cwd || process.cwd();
+        const boundary = await checkBashBoundary(command, boundaryRoot, context?.askUser);
+        if (boundary) {
+          logDebug(`[bash-guard] ${boundary.key}: ${command.trim()}`);
+          return boundary.message;
+        }
       }
     }
     return new Promise((resolve) => {
@@ -85,6 +83,9 @@ export function register(registry: ToolRegistry) {
       // redirect/boundary checks above saw the raw model command (intent),
       // and the output contract below is identical for both branches.
       const wrapped = context?.execTarget ? wrapBashCmd(context.execTarget, command) : command;
+      if (context?.execTarget) {
+        logDebug(`[bash-exec] ${wrapped}`);
+      }
       // A non-zero exit is data, not a tool failure: chains like
       // `cd X && ls missing-file` should surface BOTH the successful echo
       // output AND the ls stderr, so the model can read the whole picture
