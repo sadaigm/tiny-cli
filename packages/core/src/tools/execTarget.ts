@@ -18,8 +18,8 @@ export function wrapBashCmd(target: ExecTarget, cmd: string): string {
     // Container: run inside the container via its shell; -i (no -t) keeps the
     // output pipe clean for capture.
     case 'container': {
-      let dockerFolder = target.root ? `-w ${target.root} `: '';
-      return `docker exec -i ${dockerFolder} ${target.container} ${shell} -c ${sq(cmd)}`;
+      let dockerFolder = target.root ? `-w ${target.root} ` : '';
+      return `docker exec -i ${dockerFolder}${target.container} ${shell} -c ${sq(cmd)}`;
     }
       
     // Remote: run on the ssh host; host is passed verbatim so ~/.ssh/config

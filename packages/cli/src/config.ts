@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig, PermissionMode, LogLevel, ExecTarget } from '@tiny-cli/core';
+import { AgentConfig, DEFAULT_SYSTEM_PROMPT, McpServerConfig, PermissionMode, LogLevel, ExecTarget, SubAgentProfile } from '@tiny-cli/core';
 
 const PROJECT_CONFIG_FILE = path.join(process.cwd(), '.tiny-cli', 'agents.json');
 const HOME_PROJECT_CONFIG_FILE = path.join(os.homedir(), '.tiny-cli', 'agents.json');
@@ -57,6 +57,10 @@ interface AgentProfile {
   exec?: ExecTarget;
   /** Model accepts image input; @image mentions are sent to it. Defaults to false. */
   vision?: boolean;
+  /** Custom HTTP headers sent to the model endpoint (supports ${ENV_VAR} expansion). */
+  headers?: Record<string, string>;
+  /** Sub-agent worker profiles or profile names available to this mentor agent. */
+  subAgents?: Array<SubAgentProfile | string>;
 }
 
 /** Tool-owned runtime state, stored in preferences.json next to the resolved agents.json. */
@@ -227,7 +231,9 @@ export function profileToConfig(profile: AgentProfile, trusted: boolean, prefs?:
     activeSkills: profile.settings?.activeSkills,
     profileName: profile.name,
     execTarget: profile.exec,
-    vision: profile.vision === true
+    vision: profile.vision === true,
+    headers: expandHeaders(profile.headers),
+    subAgents: profile.subAgents,
   };
 }
 
@@ -293,6 +299,15 @@ function expandApiKey(value: string | undefined): string | undefined {
     return undefined;
   }
   return expanded;
+}
+
+function expandHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const result: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    result[k] = expandApiKey(v) ?? v;
+  }
+  return result;
 }
 
 async function tryReadFile(filePath: string): Promise<string | null> {

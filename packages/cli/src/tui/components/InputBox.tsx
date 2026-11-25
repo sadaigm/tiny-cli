@@ -16,8 +16,10 @@ import {
 } from '../utils/pasteChip.js';
 import { InputHistory, searchHistory } from '../utils/inputHistory.js';
 import { loadHistory } from '../utils/historyStore.js';
+import { verticalMoveOffset } from '../utils/lineMotion.js';
 import { getTheme } from '../theme.js';
 import { logDebug } from '@tiny-cli/core';
+import type { TextareaRenderable } from '@opentui/core';
 import { log } from 'console';
 
 /**
@@ -53,6 +55,12 @@ export interface InputBoxProps {
   onSearchActiveChange?: (active: boolean) => void;
   /** Reports the draft's current line count (multi-line Shift+Enter drafts). */
   onDraftLinesChange?: (lines: number) => void;
+  /**
+   * Called when the user presses Esc (single press — Esc-Esc still clears
+   * the draft). Lets the parent react to an abort intent even with an empty
+   * draft, e.g. killing a running sub-agent while viewing it.
+   */
+  onEscape?: () => void;
   /** Optional dispatch function for debug logging */
   dispatch?: (action: any) => void;
   /**
@@ -136,6 +144,7 @@ function InputBox({
   onMentionActiveChange,
   onSearchActiveChange,
   onDraftLinesChange,
+  onEscape,
   focus = true,
   dispatch,
 }: InputBoxProps): React.ReactNode {
@@ -160,6 +169,8 @@ function InputBox({
   // has nothing until it lands), saved fire-and-forget on every submit.
   const historyRef = useRef(new InputHistory());
   const historyLoadedRef = useRef(false);
+  // Live editor renderable (cursor position reads for history navigation).
+  const editorRef = useRef<TextareaRenderable | null>(null);
   React.useEffect(() => {
     let cancelled = false;
     loadHistory().then((loaded) => {
@@ -178,6 +189,12 @@ function InputBox({
   const replaceValue = useCallback((next: string) => {
     historyRef.current.saveDraft(next);
     setValue(next);
+    // A recalled multi-line entry must land with the cursor at the END:
+    // ↑ then walks the cursor up line-by-line (native textarea motion) and
+    // only the next ↑ from the first line recalls the next older entry.
+    // Without the snap, setText leaves the cursor mid-buffer where ↑ would
+    // move within the draft instead of continuing the history walk.
+    setCursorEndSignal((n) => n + 1);
     // Deliberately NOT routed through handleChange: a recalled `/cmd` or
     // `@file` line must not open its picker, or the picker would steal ↑/↓
     // and history navigation would stop after the first recall.
@@ -327,29 +344,32 @@ function InputBox({
 
   // --- Picker keyboard navigation (slash commands + @file mentions) --------
 
-  // History recall engages only when no picker is open AND the draft is
-  // single-line: inside a multi-line draft (Shift+Enter) the arrows move the
-  // cursor line-by-line (TextInput), not the history. When the slash or
-  // mention picker is up, ↑/↓ already belong to it; when browse mode has the
-  // arrows (InputBox hidden), this component is not mounted at all.
-  const historyKeysActive =
-    focus &&
-    !slashActive &&
-    !mentionActive &&
-    !showAutocomplete &&
-    !searchActive &&
-    !value.includes('\n');
+  // History recall engages when no picker is open. Inside a multi-line
+  // draft the arrows belong to the cursor FIRST: ↑/↓ move the caret
+  // line-by-line (native textarea motion), and only when the caret sits on
+  // the edge line (first for ↑, last for ↓) does the press walk the input
+  // history instead. This covers both a Shift+Enter draft and a recalled
+  // multi-line entry — the decision is where the cursor is, not how the
+  // draft came to exist (a recalled multi-line entry used to trap history
+  // navigation permanently). When the slash or mention picker is up, ↑/↓
+  // already belong to it; when browse mode has the arrows (InputBox
+  // hidden), this component is not mounted at all.
+  const historyKeysActive = focus && !slashActive && !mentionActive && !showAutocomplete && !searchActive;
   useInput(
     (_input, key) => {
-      if (key.upArrow) {
-        key.preventDefault(); // keep the arrow away from the focused editor
-        const recalled = historyRef.current.move(-1);
-        if (recalled !== null) replaceValue(recalled);
-      } else if (key.downArrow) {
-        key.preventDefault();
-        const recalled = historyRef.current.move(1);
-        if (recalled !== null) replaceValue(recalled);
+      const direction = key.upArrow ? -1 : key.downArrow ? 1 : 0;
+      if (direction === 0) return;
+      // Edge-check first: if the caret can still move within the draft's
+      // lines, this press belongs to the cursor — let it fall through to the
+      // focused textarea (no preventDefault) and keep the history cursor put.
+      const editor = editorRef.current;
+      const offset = editor?.logicalCursor?.offset ?? -1;
+      if (verticalMoveOffset(value, offset, direction as -1 | 1) !== null) {
+        return; // caret moves within the multi-line draft
       }
+      key.preventDefault(); // keep the arrow away from the focused editor
+      const recalled = historyRef.current.move(direction);
+      if (recalled !== null) replaceValue(recalled);
     },
     { isActive: historyKeysActive },
   );
@@ -381,6 +401,11 @@ function InputBox({
         logDebug('InputBox: Esc armed — waiting for second press to clear draft');
         escArmedRef.current = now;
         setEscHint(true);
+        // Forward Esc upward regardless of draft content — allows the parent
+        // to abort a running agent turn (master or sub-agent) even when the
+        // user has typed something in the box. Draft clearing is a secondary
+        // concern; aborting the running agent is always the primary action.
+        onEscape?.();
       }
     },
     { isActive: escClearActive },
@@ -390,6 +415,24 @@ function InputBox({
     const t = setTimeout(() => setEscHint(false), ESC_CLEAR_MS);
     return () => clearTimeout(t);
   }, [escHint]);
+
+  // --- Escape while the draft is EMPTY --------------------------------------
+  // The draft-clear handler above requires a non-empty draft, so Esc on an
+  // empty input is invisible to the app: useInputSubmit drops empty submits,
+  // and the global app handler only fires when agentState === 'running' —
+  // which is false while viewing an idle sub-agent. This handler catches
+  // that case and forwards the press so the parent can act (kill a running
+  // sub-agent, etc.).
+  const escEmptyActive =
+    focus && !searchActive && !slashActive && !mentionActive && !showAutocomplete && value.length === 0;
+  useInput(
+    (_input, key) => {
+      if (!key.escape) return;
+      key.preventDefault();
+      onEscape?.();
+    },
+    { isActive: escEmptyActive },
+  );
 
   // --- Render ---------------------------------------------------------------
 
@@ -444,6 +487,7 @@ function InputBox({
               focus={focus}
               onSearch={openSearch}
               cursorToEndSignal={cursorEndSignal}
+              editorRef={editorRef}
             />
           </Box>
         </Box>

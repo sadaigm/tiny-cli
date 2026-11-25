@@ -35,6 +35,9 @@ export interface UseSubmitProps {
   agent: Agent;
   agentApi: UseAgentApi;
   handleSlashCommand: (text: string) => Promise<unknown>;
+  /** Logs the user's message when it is routed to a sub-agent instead of the master. */
+  addLog: (entry: import('./agentTypes.js').NewLogEntry) => void;
+  addErrorLog: (content: string) => void;
 }
 
 /**
@@ -52,6 +55,8 @@ export function useSubmit({
   agent,
   agentApi,
   handleSlashCommand,
+  addLog,
+  addErrorLog,
 }: UseSubmitProps) {
   const handleSubmit = useCallback(
     async (text: string) => {
@@ -65,6 +70,31 @@ export function useSubmit({
       // transcript and model history, but no model turn starts.
       if (text.startsWith("!")) {
         await agentApi.runBangCommand(text);
+        return;
+      }
+
+      // KVM switch: while viewing a sub-agent, typed messages are injected
+      // into that sub-agent's conversation instead of starting a master turn.
+      // A sub-agent is a background worker — it has no user-facing turn to
+      // abort, so Esc (which the global handler routes here as empty input)
+      // kills the running one instead of doing nothing.
+      const target = stateRef.current.activeAgentTarget;
+      if (target?.kind === "sub") {
+        if (!text.trim()) {
+          const inst = agent.subAgentManager?.get(target.id);
+          if (inst?.status === "running") {
+            agent.subAgentManager?.kill(target.id);
+            addErrorLog(`Sub-agent "${inst.name}" killed.`);
+          } else {
+            addErrorLog(`Sub-agent "${target.id}" is not running — nothing to stop. Type /main to return.`);
+          }
+          return;
+        }
+        addLog({ type: "user", content: text });
+        const sent = await agent.subAgentManager?.sendToSub(target.id, text);
+        if (!sent) {
+          addErrorLog(`Sub-agent "${target.id}" not found — type /main to return to the master agent.`);
+        }
         return;
       }
 
@@ -115,7 +145,7 @@ export function useSubmit({
         agentApi.submitMessage(text, display);
       }
     },
-    [handleSlashCommand, agentApi, agent, paneRef, stateRef, sessionId],
+    [handleSlashCommand, agentApi, agent, paneRef, stateRef, sessionId, addLog, addErrorLog],
   );
 
   return handleSubmit;

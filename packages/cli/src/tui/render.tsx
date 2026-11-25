@@ -96,6 +96,15 @@ export async function startTui(opts: StartTuiOptions): Promise<void> {
     clearOnShutdown: false,
   });
 
+  // Raise max listeners limit: the TUI has multiple input components, modals,
+  // and hooks registered to keyInput/stdin, which exceeds Node's default cap of 10.
+  try {
+    renderer.keyInput?.setMaxListeners?.(100);
+    process.stdin.setMaxListeners?.(100);
+  } catch {
+    // ignore
+  }
+
   // Clipboard service: native pasteboard when local, OSC 52 fallback when
   // remote (SSH/tmux). Auto-copies finished mouse selections — the same
   // UX as tmux copy-mode — and reports counts to the MessageLog toast.

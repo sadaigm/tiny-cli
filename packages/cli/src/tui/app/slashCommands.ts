@@ -38,7 +38,9 @@ export function createSlashCommands({
   stateRef,
   addSystemLog,
   addErrorLog,
+  addLog,
   agentApi,
+  streamStore,
   replaySessionMessages,
   setBrowseMode,
   paneRef,
@@ -52,7 +54,9 @@ export function createSlashCommands({
   stateRef: React.RefObject<TuiState>;
   addSystemLog: (content: string) => void;
   addErrorLog: (content: string) => void;
+  addLog: (entry: import('../hooks/useAgent.js').NewLogEntry) => void;
   agentApi: UseAgentApi;
+  streamStore: import('../streamStore.js').StreamStore;
   replaySessionMessages: (messages: Session['messages']) => void;
   setBrowseMode: (on: boolean) => void;
   paneRef: React.RefObject<MessageLogHandle | null>;
@@ -620,12 +624,157 @@ export function createSlashCommands({
         case 'create-skill':
           return createSkillCommand(parts, agent, agentApi.submitMessage, addSystemLog, addErrorLog);
 
+        case 'subagent':
+        case 'sub': {
+          const subMgr = agent.subAgentManager;
+          if (!subMgr) {
+            addErrorLog('No active session or SubAgentManager available.');
+            return true;
+          }
+
+          const targetId = parts[1];
+          const message = parts.slice(2).join(' ');
+
+          // If message provided: /sub <id> <message> -> send direction to sub-agent
+          if (targetId && message) {
+            const success = await subMgr.sendToSub(targetId, message);
+            if (success) {
+              addSystemLog(`Message sent to sub-agent "${targetId}".`);
+            } else {
+              addErrorLog(`Sub-agent "${targetId}" not found.`);
+            }
+            return true;
+          }
+
+          // If targetId provided: /sub <id> -> switch view
+          if (targetId) {
+            const instance = subMgr.get(targetId);
+            if (!instance) {
+              addErrorLog(`Sub-agent "${targetId}" not found.`);
+              return true;
+            }
+
+            // Unplug the screen from any previously viewed sub-agent
+            for (const s of subMgr.list()) subMgr.detachListener(s.id);
+
+            dispatch({
+              type: 'SET_ACTIVE_TARGET',
+              target: { kind: 'sub', id: instance.id, name: instance.name },
+            });
+            dispatch({ type: 'CLEAR_LOG' });
+            addSystemLog(`Switched view to sub-agent "${instance.name}" (${instance.id}). Use /main to return.`);
+            replaySessionMessages(instance.agent.getHistory());
+
+            if (instance.status === 'running') {
+              streamStore.setSpinner(true, `sub ${instance.name}${instance.currentTool ? ` (${instance.currentTool})` : ''}…`);
+            } else {
+              streamStore.setSpinner(false, '');
+            }
+
+            // Plug the screen in: live steps / tokens stream into the log
+            subMgr.attachListener(instance.id, {
+              onStep: (step) => {
+                if (step.toolCall) {
+                  // Tool execution begins — commit streaming phases so the
+                  // log order stays thinking → text → tool.
+                  streamStore.commitThinking();
+                  streamStore.commitResponse();
+                  addLog({
+                    type: 'tool_call',
+                    content: step.toolCall.function.name,
+                    toolName: step.toolCall.function.name,
+                    toolArgs: step.toolCall.function.arguments,
+                    timing: step.timing,
+                  });
+                  if (step.toolResult !== undefined) {
+                    addLog({
+                      type: 'tool_result',
+                      content: step.toolResult,
+                      toolResult: step.toolResult,
+                      toolName: step.toolCall.function.name,
+                      timing: step.timing,
+                    });
+                  }
+                  streamStore.setSpinner(true, `sub ${instance.name}…`);
+                }
+              },
+              onText: (delta) => {
+                streamStore.setSpinner(false, '');
+                streamStore.appendResponse(delta);
+              },
+              onReasoning: (delta) => streamStore.appendThinking(delta),
+              onDone: (summary, error) => {
+                streamStore.commitThinking();
+                streamStore.commitResponse();
+                streamStore.setSpinner(false, '');
+                if (error) {
+                  addErrorLog(`Sub-agent "${instance.name}" failed: ${error}`);
+                } else if (summary) {
+                  addSystemLog(`Sub-agent "${instance.name}" finished.`);
+                }
+              },
+            });
+            return true;
+          }
+
+          // No arguments: open interactive picker overlay
+          const list = subMgr.list();
+          if (list.length === 0) {
+            addSystemLog('No sub-agents have been spawned in this session. Spawn one using the mentor or assign_task.');
+            return true;
+          }
+
+          const items = list.map((s) => ({
+            label: `${s.name} (${s.id}) · ${s.status}`,
+            value: s.id,
+            description: `${s.model}${s.currentTool ? ` · using ${s.currentTool}` : s.summary ? ' · done' : ''}`,
+          }));
+
+          dispatch({
+            type: 'OPEN_SELECTOR',
+            selector: {
+              kind: 'subagent',
+              title: `Select Sub-Agent (${list.length} available)`,
+              items,
+              selectedIndex: 0,
+            },
+          });
+          return true;
+        }
+
+        case 'main':
+        case 'master':
+        case 'mentor': {
+          // Unplug the screen from any viewed sub-agent
+          if (agent.subAgentManager) {
+            for (const s of agent.subAgentManager.list()) {
+              agent.subAgentManager.detachListener(s.id);
+            }
+          }
+          streamStore.commitThinking();
+          streamStore.commitResponse();
+          streamStore.setSpinner(false, '');
+          dispatch({
+            type: 'SET_ACTIVE_TARGET',
+            target: { kind: 'master' },
+          });
+          dispatch({ type: 'CLEAR_LOG' });
+          addSystemLog('Switched view back to Master Agent.');
+          replaySessionMessages(agent.getHistory());
+          if (stateRef.current.agentState === 'running') {
+            streamStore.setSpinner(true, 'Thinking…');
+          } else {
+            streamStore.setSpinner(false, '');
+          }
+          return true;
+        }
+
         default:
           addErrorLog(`Unknown command: /${cmd}`);
           return true;
       }
     },
-    [agent, sessionManager, session, exit, addSystemLog, addErrorLog, agentApi],
+    [agent, sessionManager, session, exit, addSystemLog, addErrorLog, addLog, agentApi, streamStore],
   );
 
 }

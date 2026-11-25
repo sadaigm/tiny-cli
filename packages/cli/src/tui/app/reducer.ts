@@ -1,6 +1,6 @@
 import type React from 'react';
 import type { AgentConfig } from '@tiny-cli/core';
-import type { TuiState, TuiMode, LogEntry, PendingSelector } from '../state.js';
+import type { TuiState, TuiMode, LogEntry, PendingSelector, ActiveAgentTarget } from '../state.js';
 import type { NewLogEntry } from '../hooks/useAgent.js';
 
 export type Action =
@@ -13,7 +13,10 @@ export type Action =
   | { type: 'SET_SESSION_ID'; sessionId: string }
   | { type: 'OPEN_SELECTOR'; selector: PendingSelector }
   | { type: 'CLOSE_SELECTOR' }
-  | { type: 'MOVE_SELECTOR'; direction: 'up' | 'down' };
+  | { type: 'MOVE_SELECTOR'; direction: 'up' | 'down' }
+  | { type: 'SET_ACTIVE_TARGET'; target: ActiveAgentTarget }
+  | { type: 'UPDATE_SUB_STATUSES'; statuses: import('@tiny-cli/core').SubAgentSummary[] }
+  | { type: 'CLOSE_SUBAGENT_PANEL' };
 
 export type AppDispatch = React.Dispatch<Action>;
 
@@ -79,6 +82,15 @@ export function reducer(state: TuiState, action: Action): TuiState {
       };
     }
 
+    case 'SET_ACTIVE_TARGET':
+      return { ...state, activeAgentTarget: action.target };
+
+    case 'UPDATE_SUB_STATUSES':
+      return { ...state, subAgentStatuses: action.statuses };
+
+    case 'CLOSE_SUBAGENT_PANEL':
+      return { ...state, subagentPanelOpen: false, subagentSelectedIndex: 0 };
+
     default:
       return state;
   }
@@ -106,6 +118,10 @@ export function createInitialState(
     planExecuting: false,
     pendingPlanConfirm: null,
     pendingSelector: null,
+    activeAgentTarget: { kind: 'master' },
+    subAgentStatuses: [],
+    subagentPanelOpen: false,
+    subagentSelectedIndex: 0,
     _config: config,
     _sessionId: sessionId,
     _permissionMode: permissionMode,

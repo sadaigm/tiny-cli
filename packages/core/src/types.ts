@@ -57,9 +57,27 @@ export type ExecTarget =
 export type PermissionMode = 'notify' | 'auto-edit' | 'auto';
 export type LogLevel = 'TRACE' | 'DEBUG' | 'LOG' | 'ERROR';
 
+export interface SubAgentProfile {
+  name: string;
+  model: string;
+  endpoint?: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  /** Skip TLS certificate verification for this worker's endpoint (defaults to the mentor's insecure setting). */
+  insecure?: boolean;
+  temperature?: number;
+  max_tokens?: number;
+  /** Iteration budget for this worker (defaults to the mentor's maxIterations). */
+  maxIterations?: number;
+}
+
+export type SubAgentStatus = 'idle' | 'running' | 'waiting_mentor' | 'completed' | 'failed' | 'cancelled';
+
 export interface AgentConfig {
   endpoint: string;
   apiKey?: string;
+  /** Custom HTTP headers sent to the model endpoint (supports ${ENV_VAR} expansion). */
+  headers?: Record<string, string>;
   model: string;
   temperature?: number;
   /** Per-response output token cap sent as max_tokens; also announced to the agent in the system prompt. */
@@ -105,6 +123,12 @@ export interface AgentConfig {
   execTarget?: ExecTarget;
   /** Model accepts image input; when unset/false, @image mentions hydrate to a skip note. Defaults to false. */
   vision?: boolean;
+  /** Sub-agent worker profiles or profile names available to this mentor agent. */
+  subAgents?: Array<SubAgentProfile | string>;
+  /** This Agent IS a sub-agent worker: it must never touch the process-wide
+   * SubAgentManager singleton (no profile refresh, no session repoint) —
+   * doing so from spawn() wipes worker profiles and hijacks the sidebar list. */
+  isSubAgent?: boolean;
 }
 
 export interface ToolDefinition {

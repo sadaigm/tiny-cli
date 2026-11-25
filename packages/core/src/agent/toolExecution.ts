@@ -23,6 +23,11 @@ export const DENIED_MSG = "Error: User denied permission to execute this tool.";
 export const REDUNDANCY_MSG = (call: ToolCall) =>
   `Error: You already called ${call.function.name} with these exact arguments in this turn. The result is already in your history. Please review the previous output or change your parameters (e.g., provide different line ranges for 'read' or a different pattern for 'grep').`;
 
+/** Status/polling tools whose results change over time even with identical
+ * arguments (sub-agent state advances in the background). Exact-arg dedupe
+ * would blind the mentor to completion and trap it in a sleep/poll loop. */
+const NON_DEDUPLICATED_TOOLS = new Set(['check_sub']);
+
 export type PlanKind = "EXEC" | "DENIED" | "REDUNDANT";
 export interface PlanEntry {
   index: number;
@@ -50,6 +55,7 @@ export interface ToolBatchDeps {
   signal?: AbortSignal;
   onApproval?: (call: ToolCall) => Promise<boolean>;
   onAskUser?: (payload: AskUserPayload) => Promise<AskUserResponse>;
+  subAgentManager?: import('../subagent/manager.js').SubAgentManager;
 }
 
 export interface BatchOutcome {
@@ -111,6 +117,7 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
         const r = s.toolResult ?? '';
         return !NON_EXEC_PREFIXES.some(p => r.startsWith(p));
       })
+      .filter(s => !NON_DEDUPLICATED_TOOLS.has(s.toolCall!.function.name))
       .map(s => `${s.toolCall!.function.name}:${s.toolCall!.function.arguments}`)
   );
   const seenInBatch = new Set<string>();
@@ -129,7 +136,11 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
     const callKey = `${call.function.name}:${call.function.arguments}`;
 
     // Redundancy: block exact duplicates seen before or within this batch.
-    if (preBatchKeys.has(callKey) || seenInBatch.has(callKey)) {
+    // Polling tools are exempt — their results change between identical calls.
+    if (
+      !NON_DEDUPLICATED_TOOLS.has(call.function.name) &&
+      (preBatchKeys.has(callKey) || seenInBatch.has(callKey))
+    ) {
       logDebug(`Redundancy detected for ${callKey}. Blocking call.`);
       plan.push({ index: i, call, kind: "REDUNDANT" });
       continue;
@@ -189,7 +200,15 @@ export async function executeToolBatch(deps: ToolBatchDeps): Promise<BatchOutcom
   // instead of the local host cwd. For local profiles, process.cwd() is
   // correct and unchanged.
   const effectiveCwd = config.execTarget?.root ?? process.cwd();
-  const execContext = { sessionId: config.sessionId, cwd: effectiveCwd, askUser: onAskUser, securedMode: config.securedMode !== false, execTarget: config.execTarget, profileName: config.profileName };
+  const execContext = {
+    sessionId: config.sessionId,
+    cwd: effectiveCwd,
+    askUser: onAskUser,
+    securedMode: config.securedMode !== false,
+    execTarget: config.execTarget,
+    profileName: config.profileName,
+    subAgentManager: deps.subAgentManager,
+  };
 
   // Execution windows [start, end] per entry index, used to report
   // observed concurrency for this batch.

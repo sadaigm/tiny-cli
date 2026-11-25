@@ -10,6 +10,7 @@ import { register as registerPlanWrite } from './defs/planWrite.js';
 import { register as registerTasks } from './defs/tasks.js';
 import { register as registerMemory } from './defs/memory.js';
 import { register as registerAskUser } from './defs/askUser.js';
+import { register as registerSubAgent } from './defs/subAgent.js';
 
 export { buildGrepArgs } from './defs/grep.js';
 
@@ -30,4 +31,5 @@ export function registerDefaultTools(registry: ToolRegistry) {
   registerTasks(registry); // manage_tasks + mark_task_complete
   registerMemory(registry);
   registerAskUser(registry);
+  registerSubAgent(registry);
 }

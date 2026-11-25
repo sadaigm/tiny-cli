@@ -1,94 +1,28 @@
 # CLAUDE.md
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+## Workspace Routing (Read First)
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+Before opening files, read the matching router to pinpoint the exact file — never list or read full directories:
 
-## Workspace Map & Routing (Read First)
-
-Before exploring or opening files across the repository, **ALWAYS read the relevant router map first** to pinpoint the exact file needed rather than listing or reading full directories:
-
-| Area | Router File | Description |
+| Area | Router | Covers |
 | :--- | :--- | :--- |
-| **Product & Code** | [`product.md`](file:///Users/sadaiyandi/Documents/development/github/tiny-cli/product.md) | Core product logic, agent loop, LLM clients, tool implementations, and CLI/TUI. |
-| **Operations & Infra** | [`operations.md`](file:///Users/sadaiyandi/Documents/development/github/tiny-cli/operations.md) | Build scripts, Docker containers, CI/CD, deployment, and configuration samples. |
-| **Content & Docs** | [`content.md`](file:///Users/sadaiyandi/Documents/development/github/tiny-cli/content.md) | User guides, architecture specs, release docs, installation guides, and licenses. |
+| Product & Code | `product.md` | agent loop, LLM clients, tools, CLI/TUI |
+| Operations & Infra | `operations.md` | build scripts, Docker, CI/CD, deploy, config |
+| Content & Docs | `content.md` | guides, specs, release docs, licenses |
 
-**Routing Rule**: First open the matching router file (`product.md`, `operations.md`, or `content.md`), locate the specific file path and one-liner explanation, and then open only that targeted file.
+## Core Rules
 
-## 1. Think Before Coding
+1. **Think before coding.** State assumptions; if uncertain or multiple interpretations exist, ask. Push back when a simpler approach exists.
+2. **Simplicity first.** Minimum code that solves the problem. No speculative features, abstractions, or configurability. No error handling for impossible scenarios.
+3. **Surgical changes.** Touch only what the task requires. Match existing style. Clean up only orphans your own change created; mention unrelated dead code, don't delete it.
+4. **Goal-driven.** State how to verify in the plan; put verification commands in the final summary for the user to run. Follow the `plan-flow` skill for planning.
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+## Efficiency
 
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-
-## Cost & File Reading Rules
-- **Never read an entire file** if you are looking for a specific function, bug, or variable. 
-- Use grep/ripgrep (`grep`) to locate the exact line numbers first.
-- When using the Read tool, restrict your scope or target specific line chunks. Do not pull files >300 lines entirely into context unless absolutely necessary.
-
-
-## File Exploration Rules
-- NEVER read an entire file to find a bug or variable. 
-- Always use `grep` or `ripgrep` to locate exact line numbers first.
-- Target specific lines instead of loading full files into context.
-
-## Efficiency Rules
-- **Budget:** Maximum 5 tool/read calls before proposing a fix or asking for direction.
-- **Symptom Matching:** Grep the symptom, read only the matched file. Never pull adjacent or secondary files without explicit approval.
-
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+- Locate code with grep first; Read only exact line ranges (offset/limit). Never read whole files >300 lines unless necessary.
+- Max 5 read/search calls before proposing a fix or asking for direction.
+- Symptom matching: grep the symptom, read only the matched file. No adjacent files without approval.
 
 ---
 
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+**Working if:** fewer unnecessary diff changes, fewer rewrites, questions come before implementation.

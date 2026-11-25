@@ -68,7 +68,12 @@ export interface ContextStats {
  * - `mode`     — choose a permission mode (notify/auto-edit/auto).
  * - `session`  — choose a saved session to load.
  */
-export type SelectorKind = 'model' | 'mode' | 'session' | 'mcp' | 'mcp-action' | 'skill' | 'thinking' | 'profile';
+export type SelectorKind = 'model' | 'mode' | 'session' | 'mcp' | 'mcp-action' | 'skill' | 'thinking' | 'profile' | 'subagent';
+
+/** Target agent currently displayed in the MessageLog (defaults to master). */
+export type ActiveAgentTarget =
+  | { kind: 'master' }
+  | { kind: 'sub'; id: string; name: string };
 
 /**
  * State for the inline AutocompletePopover overlay used by
@@ -158,6 +163,14 @@ export interface TuiState {
   pendingPlanConfirm: PendingPlanConfirm | null;
   /** Inline selector overlay state, or null when no overlay is open. */
   pendingSelector: PendingSelector | null;
+  /** Target agent currently displayed in the MessageLog (defaults to master). */
+  activeAgentTarget?: ActiveAgentTarget;
+  /** Active sub-agent summaries for sidebar / status display. */
+  subAgentStatuses?: import('@tiny-cli/core').SubAgentSummary[];
+  /** True while the sub-agent panel owns keyboard focus. */
+  subagentPanelOpen: boolean;
+  /** Index of the selected row in the sub-agent panel. */
+  subagentSelectedIndex: number;
   /**
    * Runtime overrides applied by the session switcher (formerly a
    * `declare module` augmentation in app.tsx): when set they win over the

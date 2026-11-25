@@ -79,7 +79,9 @@ describe('Agent compaction boundaries & callbacks', () => {
 
   it('fires mid-turn compaction exactly at the 10th tool call when over threshold', async () => {
     const agent = makeAgent({ compactionThresholdTokens: 500, compactionRetainTokens: 100 });
-    agent.registry.getDefinitions = () => [];
+    // Offer `read` so the availability guard in toolExecution dispatches to
+    // registry.call (calls for tools not in the offered list are blocked).
+    agent.registry.getDefinitions = () => [{ name: 'read' }] as any;
     agent.registry.call = jest.fn().mockResolvedValue('result '.repeat(40));
     const compactions: number[] = [];
     agent.onCompaction = () => { compactions.push(1); };
@@ -107,7 +109,7 @@ describe('Agent compaction boundaries & callbacks', () => {
 
   it('does not compact mid-turn when under threshold', async () => {
     const agent = makeAgent({});
-    agent.registry.getDefinitions = () => [];
+    agent.registry.getDefinitions = () => [{ name: 'read' }] as any;
     agent.registry.call = jest.fn().mockResolvedValue('ok');
     const compactions: number[] = [];
     agent.onCompaction = () => { compactions.push(1); };

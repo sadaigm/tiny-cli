@@ -13,3 +13,6 @@ export * from './commands/registry.js';
 export * from './mcp/manager.js';
 export * from './instructions.js';
 export * from './compact_utils.js';
+export * from './subagent/types.js';
+export * from './subagent/prompt.js';
+export * from './subagent/manager.js';

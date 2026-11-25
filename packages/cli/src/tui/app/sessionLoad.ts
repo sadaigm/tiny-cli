@@ -51,9 +51,9 @@ export interface AddLogFn {
 
 /**
  * Replay persisted session messages into the transcript log. Compaction
- * summaries surface as a system entry, tool-only assistant messages (no
- * text content) as compact tool markers — otherwise a compacted session
- * loads as a wall of empty agent bubbles.
+ * summaries surface as a system entry. Each assistant tool_call is paired
+ * with the tool-role result that follows it, so replayed history renders
+ * the same rich tool cards (command + result) the live stream does.
  */
 export function createReplaySessionMessages({
   addLog,
@@ -64,6 +64,9 @@ export function createReplaySessionMessages({
 }) {
   return useCallback(
     (messages: Session['messages']) => {
+      // Assistant tool_calls indexed by id — consumed when the paired
+      // tool-result message arrives.
+      const callsById = new Map<string, { name: string; arguments: string }>();
       for (const m of messages) {
         const text = typeof m.content === 'string' ? m.content : '';
         if (m.role === 'system') {
@@ -71,13 +74,34 @@ export function createReplaySessionMessages({
             const summary = text.slice('[PREVIOUS CONTEXT SUMMARY]'.length).trim();
             addSystemLog(`📋 Previous context (compacted): ${summary.slice(0, 200)}${summary.length > 200 ? '…' : ''}`);
           }
-        } else if (m.role === 'assistant' && !text.trim() && m.tool_calls?.length) {
-          for (const call of m.tool_calls) {
-            addSystemLog(`🔧 ${call.function.name}`);
+        } else if (m.role === 'assistant') {
+          if (text.trim()) addLog({ type: 'assistant', content: text });
+          for (const call of m.tool_calls ?? []) {
+            callsById.set(call.id, { name: call.function.name, arguments: call.function.arguments });
           }
-        } else if ((m.role === 'user' || m.role === 'assistant') && text.trim()) {
+        } else if (m.role === 'tool') {
+          const call = m.tool_call_id ? callsById.get(m.tool_call_id) : undefined;
+          if (call && m.tool_call_id) callsById.delete(m.tool_call_id);
+          addLog({
+            type: 'tool_call',
+            content: call?.name ?? 'tool',
+            toolName: call?.name,
+            toolArgs: call?.arguments,
+          });
+          addLog({
+            type: 'tool_result',
+            content: text,
+            toolResult: text,
+            toolName: call?.name,
+          });
+        } else if (text.trim()) {
           addLog({ type: m.role, content: text });
         }
+      }
+      // Calls whose result never landed (session persisted mid-execution or
+      // aborted) still surface as compact markers so no step is lost.
+      for (const call of callsById.values()) {
+        addSystemLog(`🔧 ${call.name}`);
       }
     },
     [addLog, addSystemLog]

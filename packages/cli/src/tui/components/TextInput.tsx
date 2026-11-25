@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, type RefObject } from 'react';
 import type { TextareaRenderable } from '@opentui/core';
 import { useInput } from '../compat.js';
 import { getTheme } from '../theme.js';
@@ -39,7 +39,14 @@ export interface TextInputProps {
    * inserting `/create-skill `).
    */
   cursorToEndSignal?: number;
+  /**
+   * Mirror of the underlying editor renderable — lets the parent read the
+   * live cursor position (e.g. InputBox deciding whether ↑/↓ should move
+   * the cursor within a multi-line draft or walk the input history).
+   */
+  editorRef?: RefObject<TextareaRenderable | null>;
 }
+
 
 /**
  * A single-or-multi-line text input backed by OpenTUI's `<textarea>`.
@@ -64,8 +71,15 @@ export default function TextInput({
   focus = true,
   onSearch,
   cursorToEndSignal = 0,
+  editorRef,
 }: TextInputProps): React.ReactNode {
   const ref = useRef<TextareaRenderable | null>(null);
+  // Share the renderable with the parent when asked (read-only usage).
+  // Synced in an effect — refs are attached after render, so the mirror is
+  // reliable from the first commit onward.
+  useEffect(() => {
+    if (editorRef) editorRef.current = ref.current;
+  });
   // Mirror for reading the freshest value inside event handlers.
   const valueRef = useRef(value);
   valueRef.current = value;
@@ -89,6 +103,7 @@ export default function TextInput({
   // Editor key handling (Enter / Shift+Enter, Ctrl+R, Tab) lives in
   // input/useEditorKeys.ts — only keys the focused editor must not see.
   useEditorKeys({ ref, valueRef, onSubmit, onSearch, focus });
+  // Keep the parent's mirror of the editor renderable in sync.
 
   // Focus / blur control (modal overlays steal the keyboard via focus=false).
   useEffect(() => {

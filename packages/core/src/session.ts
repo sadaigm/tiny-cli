@@ -1,22 +1,33 @@
 import fs from 'fs/promises';
 import path from 'path';
-import os from 'os';
 import { Session, Message, SessionMetadata } from './types.js';
 
 export class SessionManager {
   private baseDir: string;
 
   constructor(customDir?: string) {
-    // Follow the same pattern as config: project-local or home directory
+    const defaultSessionsDir = path.join(process.cwd(), '.tiny-cli', 'sessions');
     if (customDir) {
-      this.baseDir = customDir;
+      this.baseDir = path.isAbsolute(customDir)
+        ? customDir
+        : path.join(defaultSessionsDir, customDir);
     } else {
-      const projectDir = path.join(process.cwd(), '.tiny-cli', 'sessions');
-      const homeDir = path.join(os.homedir(), '.tiny-cli', 'sessions');
-      
-      // We'll check if project-local .tiny-cli exists
-      this.baseDir = projectDir; // Default to project-local
+      this.baseDir = defaultSessionsDir;
     }
+  }
+
+  getBaseDir(): string {
+    return this.baseDir;
+  }
+
+  getAssetDir(id: string): string {
+    return path.join(this.baseDir, id);
+  }
+
+  async ensureAssetDir(id: string): Promise<string> {
+    const dir = this.getAssetDir(id);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
   }
 
   private async ensureDir() {

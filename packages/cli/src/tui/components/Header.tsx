@@ -3,6 +3,8 @@ import { Box, Text } from '../compat.js';
 
 import { getTheme } from '../theme.js';
 
+import type { ActiveAgentTarget } from '../state.js';
+
 /**
  * Props for the {@link Header} component.
  */
@@ -15,6 +17,8 @@ export interface HeaderProps {
   sessionId: string;
   /** Optional version string displayed in the banner. */
   version?: string;
+  /** Active agent target currently displayed. */
+  target?: ActiveAgentTarget;
 }
 
 /**
@@ -22,17 +26,12 @@ export interface HeaderProps {
  * box of the TUI.
  *
  * Line 1: `🚀 tiny-cli` (with optional version) and `model @ endpoint`.
- * Line 2: `Session: <id>`.
+ * Line 2: `Session: <id>` or active sub-agent indication.
  *
  * This component is purely presentational and re-renders only when its
  * props change.
- *
- * @example
- * ```tsx
- * <Header model={config.model} endpoint={config.endpoint} sessionId={sessionId} />
- * ```
  */
-function Header({ model, endpoint, sessionId, version }: HeaderProps): React.ReactNode {
+function Header({ model, endpoint, sessionId, version, target }: HeaderProps): React.ReactNode {
   const theme = getTheme();
   return (
     <Box flexDirection="column">
@@ -46,9 +45,16 @@ function Header({ model, endpoint, sessionId, version }: HeaderProps): React.Rea
         </Text>
       </Box>
       <Box>
-        <Text color={theme.system}>
-          Session: <Text bold color={theme.statusText}>{sessionId}</Text>
-        </Text>
+        {target?.kind === 'sub' ? (
+          <Text color="cyan">
+            ⚡ Viewing Sub-Agent: <Text bold color={theme.statusText}>{target.name}</Text> ({target.id})
+            <Text dimColor> · type /main to return</Text>
+          </Text>
+        ) : (
+          <Text color={theme.system}>
+            Session: <Text bold color={theme.statusText}>{sessionId}</Text>
+          </Text>
+        )}
       </Box>
     </Box>
   );

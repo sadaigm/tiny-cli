@@ -2,19 +2,18 @@ import React, {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useReducer,
   useRef,
   useState,
   forwardRef,
   useSyncExternalStore,
 } from 'react';
+import type { ScrollBoxRenderable } from '@opentui/core';
 import { Box, Text, useInput, useStdout } from '../compat.js';
 import { logTrace } from '@tiny-cli/core';
 import type { LogEntry } from '../state.js';
 import MessageItem from './MessageItem.js';
 import { logViewReducer, createLogView, type LogView } from './logView/reducer.js';
-import { VISIBLE_BODY_BUDGET, renderedBodyLines, computeWindow } from './logView/estimator.js';
 import { copyToClipboard, entryClipboardText } from '../utils/clipboard.js';
 import { onSelectionCopy } from '../utils/selectionCopy.js';
 import { bindingFor, matchesBinding } from '../keybindings.js';
@@ -29,13 +28,9 @@ import { getTheme } from '../theme.js';
  * other parents can drive the viewport without going through React state.
  */
 export interface MessageLogHandle {
-  /** Scroll the focus by `delta` rows (negative = up / older). */
-  wheel: (delta: number) => void;
-  /** Move focus to the first entry (top). */
-  focusTop: () => void;
-  /** Move focus to the last entry (bottom) and re-arm auto-follow. */
+  /** Scroll to the last entry (bottom) and re-arm sticky follow. */
   focusBottom: () => void;
-  /** Move focus to a specific entry id. No-op if the id is unknown. */
+  /** Scroll to a specific entry id. No-op if the id is unknown. */
   focusEntry: (id: string) => void;
 }
 
@@ -82,14 +77,30 @@ const isEnd = (input: string, key?: { end?: boolean }): boolean =>
   Boolean(key?.end) ||
   input === '\x1B[F' || input === '\x1B[4~' || input === '\x1B[8~' || input === '\x1BOF';
 
+/** True when the scrollbox's scrollTop sits at (or past) its bottom edge. */
+function isAtBottom(sb: ScrollBoxRenderable): boolean {
+  const viewportHeight = (sb as unknown as { viewport?: { height?: number } }).viewport?.height;
+  if (viewportHeight === undefined) return true;
+  return sb.scrollTop + viewportHeight >= sb.scrollHeight;
+}
+
+/** Rows hidden above / below the scrollbox viewport (for the header hint). */
+function scrollPosition(sb: ScrollBoxRenderable): { above: number; below: number } {
+  const viewportHeight = (sb as unknown as { viewport?: { height?: number } }).viewport?.height ?? 0;
+  return {
+    above: Math.max(0, Math.round(sb.scrollTop)),
+    below: Math.max(0, Math.round(sb.scrollHeight - sb.scrollTop - viewportHeight)),
+  };
+}
+
 /**
- * Renders a focusable, scrollable view of {@link LogEntry} objects with
- * collapsible items.
+ * Renders a scrollable view of {@link LogEntry} objects with collapsible
+ * items, backed by a native OpenTUI `<scrollbox>` (sticky bottom follow,
+ * viewport culling, real Yoga-measured heights — no line estimation).
  *
- * The pane owns its own view state (focus index, expanded set, auto-follow)
- * via a local reducer — it does not touch the global app state. Keyboard
- * navigation is gated by the `active` prop so it yields to higher-priority
- * consumers (modals, selector overlay, autocomplete).
+ * The pane owns only the expand/fold set via a local reducer — it does not
+ * touch the global app state. Keyboard navigation is gated by the `active`
+ * prop so it yields to higher-priority consumers (modals, overlays).
  *
  * @example
  * ```tsx
@@ -107,18 +118,39 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   const terminalColumns = stdout?.columns ?? 80;
   // `maxHeight` is the interior height of the bordered parent Box. The
   // border itself is drawn by the parent, so no further subtraction here.
-  // Reserve 1 row for the `↑ N above · ↓ M below` header and 1 for the
-  // status strip rendered at the bottom of this component.
+  // Reserve 1 row for the header hints and 1 for the status strip.
   const paneHeight = Math.max(4, (maxHeight ?? terminalRows) - 2);
   const paneColumns = Math.max(10, terminalColumns - 2);
 
-  const [view, dispatch] = useReducer(logViewReducer, entries.length, createLogView);
+  const [view, dispatch] = useReducer(logViewReducer, undefined, createLogView);
+
+  // Sticky bottom-follow: scrolling up disengages it, returning to the
+  // bottom (wheel down / End) re-engages.
+  const [stickyScroll, setStickyScroll] = useState(true);
+
+  // Scroll-position hint (`↑ N above · ↓ M below`), refreshed from the
+  // scrollbox after every scroll action and when the log content changes.
+  // Null while pinned to the bottom (nothing hidden either way).
+  const [scrollPos, setScrollPos] = useState<{ above: number; below: number } | null>(null);
+  const refreshScrollPos = useCallback(() => {
+    const sb = scrollboxRef.current;
+    if (!sb) return;
+    const pos = scrollPosition(sb);
+    setScrollPos(pos.above > 0 || pos.below > 0 ? pos : null);
+  }, []);
+
+  // Native scrollbox instance — all scrolling goes through its methods.
+  const scrollboxRef = useRef<ScrollBoxRenderable>(null);
+  const scrollboxRefCb = useCallback((node: ScrollBoxRenderable | null) => {
+    scrollboxRef.current = node;
+  }, []);
 
   // Transient feedback for the browse-mode `y` yank and mouse-selection
   // auto-copy: shown as a colored segment on the pane header line for a
   // moment, cleared after a timeout. kind picks the theme color — success
   // green for a copy, warning for a failure.
   const [yankStatus, setYankStatus] = useState<{ text: string; kind: 'ok' | 'warn' } | null>(null);
+
   useEffect(() => {
     if (!yankStatus) return;
     const t = setTimeout(() => setYankStatus(null), 2000);
@@ -137,20 +169,6 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
       ),
     ),
   );
-
-  // Reconcile focus when the entry list grows / shrinks. When the newly
-  // appended entries contain a user message (sent or drained from the
-  // queue), re-arm auto-follow: sending a message is intent to watch the
-  // conversation again, even if the user had scrolled up to read history.
-  const prevLengthRef = useRef(entries.length);
-  useEffect(() => {
-    if (entries.length !== prevLengthRef.current) {
-      const grew = entries.length > prevLengthRef.current;
-      const rearm = grew && entries.slice(prevLengthRef.current).some((e) => e.type === 'user');
-      dispatch({ type: 'RECONCILE', length: entries.length, rearm });
-      prevLengthRef.current = entries.length;
-    }
-  }, [entries.length, entries]);
 
   // Collapse reasoning sections when a turn finishes (running → false).
   const prevRunningRef = useRef(agentRunning);
@@ -185,12 +203,8 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   browseModeRef.current = browseMode;
   const entriesRef = useRef(entries);
   entriesRef.current = entries;
-  const focusIndexRef = useRef(view.focusIndex);
-  focusIndexRef.current = view.focusIndex;
   const paneHeightRef = useRef(paneHeight);
   paneHeightRef.current = paneHeight;
-  const paneColumnsRef = useRef(paneColumns);
-  paneColumnsRef.current = paneColumns;
   const viewRef = useRef<LogView>(view);
   viewRef.current = view;
 
@@ -201,8 +215,6 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   const onPaneKey = useCallback(
     (input: string, key: { ctrl?: boolean; shift?: boolean; escape?: boolean; return?: boolean; upArrow?: boolean; downArrow?: boolean; leftArrow?: boolean; rightArrow?: boolean; pageUp?: boolean; pageDown?: boolean; tab?: boolean; home?: boolean; end?: boolean }) => {
       try {
-      const n = entriesRef.current.length;
-
       // The browse-mode hotkey (Ctrl+P by default, remappable via keys.json)
       // toggles from either state.
       if (matchesBinding(input, key, bindingFor('browse'))) {
@@ -210,10 +222,9 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         return;
       }
       // Expand/collapse works in normal mode too — same effect as clicking
-      // the card's header row. Targets the focused entry (the tail while
-      // following).
+      // the card's header row. Targets the newest entry (the tail).
       if (matchesBinding(input, key, bindingFor('expand'))) {
-        const focused = entriesRef.current[viewRef.current.focusIndex];
+        const focused = entriesRef.current.at(-1);
         if (focused) dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
         return;
       }
@@ -224,65 +235,40 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
           setBrowse(false);
           return;
         }
-        if (n === 0) return;
-        if (key.upArrow || key.downArrow) {
-          const dir = key.upArrow ? -1 : 1;
-          const focused = entriesRef.current[viewRef.current.focusIndex];
-          const lines = focused
-            ? renderedBodyLines(focused, paneColumnsRef.current, viewRef.current.expanded, agentRunning)
-            : 0;
-          const visible = VISIBLE_BODY_BUDGET(paneHeightRef.current);
-          if (lines > visible) {
-            // Tall expanded entry: ↑/↓ scroll inside it first; once the
-            // edge is reached, movement continues to the neighbour entry.
-            const offset = viewRef.current.lineOffset;
-            if (dir > 0 && offset < lines - visible) {
-              dispatch({ type: 'SCROLL_LINE', offset: offset + 1 });
-              return;
-            }
-            if (dir < 0 && offset > 0) {
-              dispatch({ type: 'SCROLL_LINE', offset: offset - 1 });
-              return;
-            }
-          }
-          // Moving up into a tall entry lands at its bottom; moving down
-          // into one lands at its top.
-          const entering = viewRef.current.focusIndex + dir;
-          const target = entriesRef.current[entering];
-          let setOffset: number | undefined;
-          if (target) {
-            const targetLines = renderedBodyLines(
-              target, paneColumnsRef.current, viewRef.current.expanded, agentRunning);
-            if (dir < 0 && targetLines > VISIBLE_BODY_BUDGET(paneHeightRef.current)) {
-              setOffset = targetLines - VISIBLE_BODY_BUDGET(paneHeightRef.current);
-            }
-          }
-          dispatch({ type: 'FOCUS_DELTA', delta: dir, length: n, setOffset });
-          return;
-        }
-        if (key.pageUp) dispatch({ type: 'FOCUS_DELTA', delta: -(paneHeightRef.current - 1), length: n });
-        else if (key.pageDown) dispatch({ type: 'FOCUS_DELTA', delta: paneHeightRef.current - 1, length: n });
-        else if (key.tab) {
-          // Tab toggles the focused card: expand/collapse (chat-cards design
+        const sb = scrollboxRef.current;
+        if (key.upArrow) {
+          sb?.scrollBy(-3);
+          setStickyScroll(false);
+        } else if (key.downArrow) {
+          sb?.scrollBy(3);
+          if (sb) setStickyScroll(isAtBottom(sb));
+        } else if (key.pageUp) {
+          sb?.scrollBy(-(paneHeightRef.current - 1));
+          setStickyScroll(false);
+        } else if (key.pageDown) {
+          sb?.scrollBy(paneHeightRef.current - 1);
+          if (sb) setStickyScroll(isAtBottom(sb));
+        } else if (key.tab) {
+          // Tab toggles the newest card: expand/collapse (chat-cards design
           // — same effect as clicking the card's header row).
-          const focused = entriesRef.current[focusIndexRef.current];
+          const focused = entriesRef.current.at(-1);
           if (focused) dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
         } else if (key.rightArrow) {
-          // → Expand the focused card (no-op when already expanded).
-          const focused = entriesRef.current[focusIndexRef.current];
+          // → Expand the newest card (no-op when already expanded).
+          const focused = entriesRef.current.at(-1);
           if (focused && !viewRef.current.expanded.has(focused.id)) {
             dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
           }
         } else if (key.leftArrow) {
-          // ← Collapse the focused card (no-op when already collapsed).
-          const focused = entriesRef.current[focusIndexRef.current];
+          // ← Collapse the newest card (no-op when already collapsed).
+          const focused = entriesRef.current.at(-1);
           if (focused && viewRef.current.expanded.has(focused.id)) {
             dispatch({ type: 'TOGGLE_EXPAND', id: focused.id });
           }
         } else if (matchesBinding(input, key, bindingFor('yank'))) {
-          // Yank: OSC 52 copy of the focused entry's raw content (tool
+          // Yank: OSC 52 copy of the newest entry's raw content (tool
           // args/result, or message text) to the local clipboard.
-          const focused = entriesRef.current[focusIndexRef.current];
+          const focused = entriesRef.current.at(-1);
           if (focused) {
             const text = entryClipboardText(focused);
             const ok = copyToClipboard(text);
@@ -292,8 +278,18 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
                 : { text: '⚠ copy needs a TTY (stdout redirected)', kind: 'warn' },
             );
           }
-        } else if (isHome(input, key)) dispatch({ type: 'FOCUS_ABS', index: 0, length: n });
-        else if (isEnd(input, key)) dispatch({ type: 'FOCUS_ABS', index: n - 1, length: n, rearm: true });
+        } else if (isHome(input, key)) {
+          sb?.scrollTo(0);
+          setStickyScroll(false);
+        } else if (isEnd(input, key)) {
+          sb?.scrollTo(sb.scrollHeight);
+          setStickyScroll(true);
+        } else if (sb) {
+          // Arrow/page scrolls disengage sticky follow; scrolling back to the
+          // bottom edge re-arms it.
+          setStickyScroll(isAtBottom(sb));
+        }
+        if (sb) refreshScrollPos();
       }
       // Outside browse mode this hook claims nothing — printable chars,
       // arrows, and Tab all pass through to the InputBox unchanged.
@@ -305,51 +301,40 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
     },
     // Intentionally minimal: all branched-on values are read through refs
     // (see above), so re-creating the callback on every change is pointless —
-    // useInput wouldn't pick up the new instance anyway. agentRunning is
-    // read directly but only flips rarely; a stale value for one render is
-    // harmless (it only affects scroll-eligibility of reasoning entries).
-    [setBrowse, agentRunning],
+    // useInput wouldn't pick up the new instance anyway.
+    [setBrowse, refreshScrollPos],
   );
   useInput(onPaneKey, { isActive: active });
 
-  // Imperative handle for mouse wheel + jump shortcuts.
-  const dispatchWheel = useCallback(
-    (delta: number) => dispatch({ type: 'FOCUS_DELTA', delta, length: entries.length }),
-    [entries.length],
-  );
+  // Imperative handle for jump shortcuts.
   useImperativeHandle(
     ref,
     (): MessageLogHandle => ({
-      wheel: dispatchWheel,
-      focusTop: () => dispatch({ type: 'FOCUS_ABS', index: 0, length: entries.length }),
-      focusBottom: () =>
-        dispatch({ type: 'FOCUS_ABS', index: entries.length - 1, length: entries.length, rearm: true }),
+      focusBottom: () => {
+        const sb = scrollboxRef.current;
+        if (!sb) return;
+        sb.scrollTo(sb.scrollHeight);
+        setStickyScroll(true);
+        refreshScrollPos();
+      },
       focusEntry: (id: string) => {
-        const index = entries.findIndex((e) => e.id === id);
-        if (index !== -1) dispatch({ type: 'FOCUS_ABS', index, length: entries.length });
+        const sb = scrollboxRef.current;
+        if (sb && entries.some((e) => e.id === id)) {
+          sb.scrollChildIntoView(id);
+          refreshScrollPos();
+        }
       },
     }),
-    [dispatchWheel, entries],
+    [entries, refreshScrollPos],
   );
 
-  // Chat-cards layout: flat list, no turn grouping — computeWindow counts
-  // each entry as its card (header + body) plus the 1-row gap between cards.
-  // While streaming, rows are reserved for the live panels below the cards
-  // (thinking ≤ 4 rows, response ≤ 1 + RESPONSE_CAP) so the pane never
-  // overflows into the overlap garble.
-  const responseCap = Math.max(3, Math.floor((paneHeight - 1) / 3));
-  const reserve = agentRunning ? 4 + 1 + responseCap : 0;
-  const win = useMemo(
-    () => computeWindow(entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, reserve),
-    [entries, view.focusIndex, paneHeight, paneColumns, view.autoFollow, view.expanded, agentRunning, reserve],
-  );
+  // Keep the hint honest as content grows/shrinks (new messages, streaming,
+  // expand/collapse change heights too).
+  useEffect(refreshScrollPos, [entries, view.expanded, refreshScrollPos]);
 
-  const visibleEntries = entries.slice(win.startIndex, win.endIndex);
-
-  const positionHint =
-    win.linesAbove + win.linesBelow > 0
-      ? `↑ ${win.linesAbove} above · ↓ ${win.linesBelow} below${view.autoFollow ? ' · following' : ''}`
-      : '';
+  const positionHint = scrollPos
+    ? `↑ ${scrollPos.above} above · ↓ ${scrollPos.below} below${stickyScroll ? ' · following' : ''}`
+    : '';
   const headerText = browseMode
     ? `BROWSE — ↑↓/PgUp/PgDn scroll · Tab expand · → expand · ← collapse · y copy · Home/End · Esc to type${positionHint ? '  ·  ' + positionHint : ''}`
     : `${positionHint ? positionHint + '  ·  ' : ''}Ctrl+E expand · Ctrl+P to browse`;
@@ -358,52 +343,38 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
   const theme = getTheme();
   const toastColor = yankStatus?.kind === 'warn' ? theme.warning : theme.success;
 
-  // Render one entry card at its current expand/focus state.
-  const renderItem = (entry: LogEntry): React.ReactNode => {
-    const isFocused = entry.id === entries[view.focusIndex]?.id;
-    // Focus fill only in browse mode: during streaming, auto-follow moves
-    // focus to each newest entry, which made new cards flash cardFocused
-    // before settling into their family shade.
-    const showFocused = isFocused && browseMode;
-    const budget = VISIBLE_BODY_BUDGET(paneHeight);
-    const scrollable =
-      isFocused &&
-      renderedBodyLines(entry, paneColumns, view.expanded, agentRunning) > budget;
-    return (
-      <MessageItem
-        key={entry.id}
-        entry={entry}
-        focused={showFocused}
-        expanded={view.expanded.has(entry.id)}
-        agentRunning={agentRunning}
-        columns={paneColumns}
-        lineOffset={scrollable ? view.lineOffset : 0}
-        maxLines={scrollable ? budget : undefined}
-        onToggle={() => dispatch({ type: 'TOGGLE_EXPAND', id: entry.id })}
-      />
-    );
-  };
+  // Render one entry card. No clipping: the scrollbox handles overflow, so
+  // every card renders its full body.
+  const renderItem = (entry: LogEntry): React.ReactNode => (
+    <MessageItem
+      key={entry.id}
+      entry={entry}
+      expanded={view.expanded.has(entry.id)}
+      agentRunning={agentRunning}
+      columns={paneColumns}
+      lineOffset={undefined}
+      maxLines={undefined}
+      onToggle={() => dispatch({ type: 'TOGGLE_EXPAND', id: entry.id })}
+    />
+  );
 
   // Flat card list (chat-cards design): one card per entry, 1 blank row
-  // between cards. The estimator charges the same gap (see computeWindow).
+  // between cards. The scrollbox culls offscreen children, so rendering
+  // every entry is cheap.
   const renderChunks = (): React.ReactNode[] => {
     const out: React.ReactNode[] = [];
-    for (let i = win.startIndex; i < win.endIndex; i++) {
+    for (let i = 0; i < entries.length; i++) {
       if (i > 0) out.push(<Text key={`sp-${i}`}>{' '}</Text>);
-      if(entries[i]){
-        out.push(renderItem(entries[i]));
-      }
+      out.push(renderItem(entries[i]));
     }
     return out;
   };
 
   return (
     // Fixed total height (header 1 + body + spinner 1 = maxHeight). The
-    // header stays pinned at top; the body is bottom-anchored (chat-app
-    // feel) so a short conversation hugs the spinner/input instead of
-    // leaving blank rows between the last card and the strip — the empty
-    // region, if any, sits between header and first card. computeWindow
-    // still budgets entries against the same paneHeight.
+    // header stays pinned at top; the scrollbox pins to the bottom
+    // (stickyStart) so a short conversation hugs the spinner/input — the
+    // empty region, if any, sits between header and first card.
     <Box flexDirection="column" height={maxHeight ?? terminalRows}>
       {/* Header row: hints stay dim; the toast rides the same line in
           theme colors so it never shifts the rows below while visible. */}
@@ -411,30 +382,44 @@ const MessageLog = forwardRef<MessageLogHandle, MessageLogProps>(function Messag
         <Text dimColor> {headerText}</Text>
         {yankStatus ? <Text color={toastColor}> {yankStatus.text}</Text> : null}
       </Box>
-      <Box
-        flexDirection="column"
+      <scrollbox
+        ref={scrollboxRefCb}
+        stickyScroll={stickyScroll}
+        stickyStart="bottom"
+        scrollY={true}
+        width="100%"
         flexGrow={1}
-        justifyContent="flex-end"
-        overflowY="hidden"
         onMouseScroll={
           mouseEnabled
-            ? (event: { scroll: { direction: string } }) => {
+            ? (event: { scroll?: { direction?: string } }) => {
                 // Native wheel (replaces StdinMouseBridge): up = older (-1),
-                // down = newer (+1), one focus step per event like the bridge.
-                logTrace(`[mouse] wheel: ${event.scroll.direction}`);
-                const delta = event.scroll.direction === 'up' ? -1 : 1;
-                dispatchWheel(delta);
+                // down = newer (+1), one row step per event like the bridge.
+                logTrace(`[mouse] wheel: ${event.scroll?.direction}`);
+                const sb = scrollboxRef.current;
+                const delta = event.scroll?.direction === 'up' ? -1 : 1;
+                sb?.scrollBy(delta);
+                // Up disengages bottom-follow; down re-engages once back at
+                // the bottom edge.
+                if (sb) {
+                  if (delta < 0) setStickyScroll(false);
+                  else if (isAtBottom(sb)) setStickyScroll(true);
+                  refreshScrollPos();
+                }
               }
             : undefined
         }
       >
         {renderChunks()}
-        {visibleEntries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
+        {entries.length === 0 ? <Text dimColor> No messages yet — type below to begin.</Text> : null}
         {/* Live streaming phases — subscribed to the StreamStore, so token
-            deltas re-render only these panels, never the whole App. */}
+            deltas re-render only these panels, never the whole App. They
+            render inside the scrollbox as full-size content: stickyScroll
+            pins them to the bottom while streaming, and an unbounded
+            response grows the scroll area instead of overflowing the
+            fixed-height pane column (which drew over the input/spinner). */}
         {agentRunning ? <ThinkingPanel columns={paneColumns} /> : null}
-        {agentRunning ? <ResponsePanel columns={paneColumns} maxLines={responseCap} /> : null}
-      </Box>
+        {agentRunning ? <ResponsePanel columns={paneColumns} /> : null}
+      </scrollbox>
       {/* Reserved 1-line status strip — constant height, no reflow. */}
       <SpinnerStrip agentRunning={agentRunning} queuedCount={queuedCount} />
     </Box>

@@ -20,6 +20,7 @@ import type {
 } from "./state.js";
 import AutocompletePopover from "./components/AutocompletePopover.js";
 import Header from "./components/Header.js";
+import SubAgentSidebar from "./components/SubAgentSidebar.js";
 import StatusBar from "./components/StatusBar.js";
 import MessageLog, { type MessageLogHandle } from "./components/MessageLog.js";
 import Spinner from "./components/Spinner.js";
@@ -218,7 +219,9 @@ export default function App({
     stateRef,
     addSystemLog,
     addErrorLog,
+    addLog,
     agentApi,
+    streamStore,
     replaySessionMessages,
     setBrowseMode,
     paneRef,
@@ -232,7 +235,39 @@ export default function App({
     agent,
     agentApi,
     handleSlashCommand,
+    addLog,
+    addErrorLog,
   });
+
+  // ── Sub-agent status feed (sidebar / status strip) ──
+  // The manager is recreated when the session ID or config changes, so the
+  // subscription is keyed on both. Every status transition re-sends the full
+  // list — summaries are tiny and the sidebar re-renders off this alone.
+  useEffect(() => {
+    const mgr = agent.subAgentManager;
+    if (!mgr) return;
+    mgr.onStatusChange = () => {
+      dispatch({ type: "UPDATE_SUB_STATUSES", statuses: mgr.list() });
+    };
+    dispatch({ type: "UPDATE_SUB_STATUSES", statuses: mgr.list() });
+    return () => {
+      mgr.onStatusChange = undefined;
+    };
+  }, [agent, state._sessionId, dispatch]);
+
+  // ── Sub-agent completion → mentor reactivation ──
+  // When a worker finishes while the mentor is idle, start a turn with the
+  // notification as input. (Mid-turn completions are injected into history
+  // by Agent itself — no TUI involvement needed.) submitMessage queues
+  // automatically if a turn happens to start concurrently.
+  useEffect(() => {
+    agent.onReactivate = (notification) => {
+      agentApi.submitMessage(notification, `⚙ ${notification}`);
+    };
+    return () => {
+      agent.onReactivate = undefined;
+    };
+  }, [agent, agentApi]);
 
   // ── Selector overlay: accept / dismiss ──
   const acceptSelector = useCallback(
@@ -308,6 +343,10 @@ export default function App({
           } else {
             addErrorLog(`Session not found: ${chosen}`);
           }
+          break;
+        }
+        case "subagent": {
+          await handleSlashCommand(`/subagent ${chosen}`);
           break;
         }
         case "mcp": {
@@ -422,6 +461,102 @@ export default function App({
   const lastCtrlCRef = useRef(0);
   const CTRL_C_WINDOW_MS = 2000;
 
+  // Esc aborts the active target. When viewing master, it aborts the master turn.
+  // When viewing a sub-agent, it aborts/kills that specific sub-agent.
+  const handleEscape = useCallback(() => {
+    const target = stateRef.current.activeAgentTarget;
+    if (target?.kind === "sub") {
+      const inst = agent.subAgentManager?.get(target.id);
+      if (inst && inst.status === "running") {
+        agent.subAgentManager?.kill(target.id);
+        streamStore.setSpinner(false, "");
+        addErrorLog(`Sub-agent "${inst.name}" (${inst.id}) stopped.`);
+      }
+      return;
+    }
+
+    if (stateRef.current.agentState === "running") {
+      try {
+        agentApi.abortCurrentRun();
+        streamStore.setSpinner(false, "");
+      } catch (e) {
+        logTrace(`[trace] abortCurrentRun threw: ${(e as Error)?.name}: ${(e as Error)?.message}\n${(e as Error)?.stack ?? ''}`);
+      }
+    }
+  }, [agent, agentApi, streamStore, addErrorLog]);
+
+  // ── Sub-agent panel keyboard navigation (Ctrl+G) ──
+  // Mirrors the selector overlay: a gated useInput that owns the keyboard
+  // while the panel is open. selectedIndex is mirrored in a ref so batched
+  // keystrokes operate on the freshest value. Ctrl+X lives ONLY here — never
+  // in the global handler or InputBox — so it is inert while typing.
+  const panelIndexRef = useRef(0);
+  const panelOpen = state.subagentPanelOpen;
+  const panelOverlayActive = !!(
+    state.pendingSelector ||
+    state.pendingApproval ||
+    state.pendingQuestions ||
+    state.pendingRecovery ||
+    state.pendingPlanConfirm
+  );
+  useInput(
+    (input, key) => {
+      const statuses = stateRef.current.subAgentStatuses ?? [];
+      if (statuses.length === 0) {
+        dispatch({ type: "CLOSE_SUBAGENT_PANEL" });
+        return;
+      }
+
+      if (key.upArrow || key.downArrow) {
+        const max = statuses.length - 1;
+        const cur = panelIndexRef.current;
+        const next = key.upArrow
+          ? cur <= 0
+            ? max
+            : cur - 1
+          : cur >= max
+            ? 0
+            : cur + 1;
+        panelIndexRef.current = next;
+        dispatch({ type: "PATCH", patch: { subagentSelectedIndex: next } });
+        return;
+      }
+
+      if (matchesBinding(input, key, bindingFor("agentKill"))) {
+        const idx = Math.min(panelIndexRef.current, statuses.length - 1);
+        const target = statuses[idx];
+        if (!target) return;
+        agent.subAgentManager?.kill(target.id);
+        const active = stateRef.current.activeAgentTarget;
+        if (active?.kind === "sub" && active.id === target.id) {
+          streamStore.setSpinner(false, "");
+        }
+        addErrorLog(`Sub-agent "${target.name}" (${target.id}) stopped.`);
+        // Advance to the next running agent (or stay).
+        const remaining = statuses.filter((s) => s.id !== target.id);
+        const nextIdx = remaining.findIndex(
+          (s, i) => s.status === "running" && i >= idx,
+        );
+        const fallback = remaining.findIndex((s) => s.status === "running");
+        const pick = nextIdx >= 0 ? nextIdx : fallback >= 0 ? fallback : Math.min(idx, remaining.length - 1);
+        panelIndexRef.current = Math.max(0, pick);
+        dispatch({ type: "PATCH", patch: { subagentSelectedIndex: Math.max(0, pick) } });
+        return;
+      }
+
+      if (input === "a" && !key.ctrl && !key.meta && !key.shift) {
+        agent.subAgentManager?.killAll();
+        addSystemLog("All sub-agents stopped.");
+        return;
+      }
+
+      if (key.escape || matchesBinding(input, key, bindingFor("agentPanel"))) {
+        dispatch({ type: "CLOSE_SUBAGENT_PANEL" });
+      }
+    },
+    { isActive: panelOpen && !panelOverlayActive },
+  );
+
   // Exit must never be held hostage by cleanup: destroy() awaits MCP server
   // teardown, and an unresponsive stdio server would hang it forever — give
   // it a short grace period, then exit regardless.
@@ -456,6 +591,7 @@ export default function App({
       : stateRef.current.pendingSelector ? 'selector'
       : searchActiveRef.current ? 'search'
       : browseModeRef.current ? 'browse'
+      : stateRef.current.subagentPanelOpen ? 'agentPanel'
       : undefined;
     if (key.ctrl || skipReason) {
       logInfo(`[keys] input=${JSON.stringify(input)} ctrl=${!!key.ctrl} skip=${skipReason ?? 'no'}`);
@@ -469,18 +605,25 @@ export default function App({
       return;
     }
 
-    if (
-      matchesBinding(input, key, bindingFor("abort")) &&
-      stateRef.current.agentState === "running"
-    ) {
-      try{
-        agentApi.abortCurrentRun();
-      } catch (e) {
-        logTrace(`[trace] abortCurrentRun threw: ${(e as Error)?.name}: ${(e as Error)?.message}\n${(e as Error)?.stack ?? ''}`);
+    // Ctrl+G focuses the sub-agent panel (works even while typing, like
+    // Ctrl+S). Ignored when no sub-agents exist.
+    if (matchesBinding(input, key, bindingFor("agentPanel"))) {
+      const statuses = stateRef.current.subAgentStatuses ?? [];
+      if (statuses.length > 0) {
+        const firstRunning = statuses.findIndex((s) => s.status === "running");
+        const sel = firstRunning >= 0 ? firstRunning : 0;
+        panelIndexRef.current = sel;
+        dispatch({
+          type: "PATCH",
+          patch: { subagentPanelOpen: true, subagentSelectedIndex: sel },
+        });
       }
       return;
-      
+    }
 
+    if (matchesBinding(input, key, bindingFor("abort"))) {
+      handleEscape();
+      return;
     }
 
     // Ctrl+D exits immediately; Ctrl+C needs a second press. Some terminals
@@ -569,7 +712,13 @@ export default function App({
   //   - 1  (input box)
   //   - 5  (bottom agent-details box: Header 2 + StatusBar 1 + border 2)
   //   = top conversation box (its border + a 1-line status strip + the log)
-  const bottomBoxHeight = 5;
+  // Sub-agent side panel: a dedicated sidebar on wide terminals, or a
+  // one-line strip inside the bottom box on narrow ones (graceful collapse).
+  const subStatuses = state.subAgentStatuses ?? [];
+  const showSubSidebar = terminalColumns >= 80 && subStatuses.length > 0;
+  const showSubStrip = terminalColumns < 80 && subStatuses.length > 0;
+  const SUBAGENT_SIDEBAR_WIDTH = 28;
+  const bottomBoxHeight = showSubStrip ? 6 : 5;
   // Multi-line draft display: the input grows with the draft (Shift+Enter),
   // capped so a giant paste-chip draft can't eat the screen. Editing behavior
   // is unchanged — only the rendered height and the pane budget below.
@@ -644,21 +793,23 @@ export default function App({
         {/* TOP: conversation pane — fixed height, scrollable, collapsible.
           Border stays themed and quiet; only alarms (pending modal,
           error) override it. */}
-        <Box
-          flexDirection="column"
-          height={topBoxHeight}
-          borderStyle="round"
-          borderColor={
-            state.pendingApproval ||
-            state.pendingQuestions ||
-            state.pendingRecovery
-              ? theme.warning
-              : state.agentState === "error"
-                ? theme.error
-                : theme.border
-          }
-        >
-          <MessageLog
+        <Box height={topBoxHeight} flexDirection="row">
+          <Box
+            flexDirection="column"
+            height={topBoxHeight}
+            width={showSubSidebar ? terminalColumns - SUBAGENT_SIDEBAR_WIDTH : terminalColumns}
+            borderStyle="round"
+            borderColor={
+              state.pendingApproval ||
+              state.pendingQuestions ||
+              state.pendingRecovery
+                ? theme.warning
+                : state.agentState === "error"
+                  ? theme.error
+                  : theme.border
+            }
+          >
+            <MessageLog
             ref={paneRef}
             entries={state.log}
             active={paneKeysActive}
@@ -671,6 +822,17 @@ export default function App({
             }
             queuedCount={state.messageQueue.length}
           />
+          </Box>
+          {showSubSidebar ? (
+            <SubAgentSidebar
+              statuses={subStatuses}
+              focused={panelOpen}
+              selectedIndex={state.subagentSelectedIndex}
+              activeTarget={state.activeAgentTarget}
+              width={SUBAGENT_SIDEBAR_WIDTH}
+              height={topBoxHeight}
+            />
+          ) : null}
         </Box>
 
         {/* MIDDLE: input box — always mounted; unmounting would tear down
@@ -679,9 +841,13 @@ export default function App({
           owns arrows/Tab without key conflicts; also blurred while a modal
           overlay owns the keyboard (its quick-select keys y/s/n/a must not
           land in the text draft). */}
-        {browseMode ? (
+        {browseMode || panelOpen ? (
           <Box height={inputHeight}>
-            <Text dimColor> BROWSE MODE — Esc or Enter to resume typing</Text>
+            <Text dimColor>
+              {panelOpen
+                ? " AGENT PANEL — ↑/↓ select · Ctrl+X kill · a kill-all · Esc back"
+                : " BROWSE MODE — Esc or Enter to resume typing"}
+            </Text>
           </Box>
         ) : null}
         <Box display={browseMode ? "none" : "flex"}>
@@ -694,8 +860,10 @@ export default function App({
             onMentionActiveChange={setMentionActive}
             onSearchActiveChange={setSearchActive}
             onDraftLinesChange={setDraftLines}
+            onEscape={handleEscape}
             focus={
               !browseMode &&
+              !panelOpen &&
               !state.pendingApproval &&
               !state.pendingQuestions &&
               !state.pendingRecovery &&
@@ -719,13 +887,36 @@ export default function App({
             model={config_.model}
             endpoint={config_.endpoint}
             sessionId={sessionId_}
+            target={state.activeAgentTarget}
           />
+          {showSubStrip ? (
+            <Text color={theme.accent} wrap="truncate">
+              ⚡ Sub-Agents:{" "}
+              {subStatuses
+                .map(
+                  (s) =>
+                    `[${s.id}: ${s.name} (${
+                      s.status === "running"
+                        ? "working ⏳"
+                        : s.status === "completed"
+                          ? "done ✅"
+                          : s.status === "failed"
+                            ? "failed ❌"
+                            : s.status === "waiting_mentor"
+                              ? "waiting 🔄"
+                              : "idle ⚪"
+                    })]`,
+                )
+                .join(" ")}
+            </Text>
+          ) : null}
           <StatusBar
             mode={state.mode}
             contextStats={state.contextStats}
             permissionMode={permissionMode}
             compactThreshold={config_.compactionThresholdTokens}
             thinkingLevel={config_.thinkingLevel}
+            profileName={config_.profileName}
             cwd={process.cwd()}
           />
         </Box>

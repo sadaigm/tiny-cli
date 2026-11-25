@@ -21,6 +21,7 @@ import { SECURITY_PROMPT_SECTION } from "./prompts/security.js";
 import fs from "fs/promises";
 import path from "path";
 import { McpManager } from "./mcp/manager.js";
+import { SubAgentManager, getSubAgentManager } from "./subagent/manager.js";
 
 // Helper functions for memory relevance filtering
 function filterRelevantMemories(userInput: string, memories: Array<{type: string, description: string, content: string}>): Array<{type: string, description: string, content: string}> {
@@ -63,6 +64,7 @@ export class Agent {
   private config: AgentConfig;
   private messages: Message[] = [];
   public mcpManager: McpManager;
+  public subAgentManager?: SubAgentManager;
 
   /** Called after any message is appended to this.messages. */
   onHistoryChange?: () => void;
@@ -71,12 +73,37 @@ export class Agent {
   /** Called when a model request fails mid-turn; the turn continues. */
   onModelError?: (error: Error) => void;
 
+  /** True while a run() turn is executing on this agent. */
+  private runningTurn = false;
+
+  /** Fired when a sub-agent completes while this (mentor) agent is IDLE —
+   * the host (TUI) starts a new turn with the notification as input. While
+   * a turn IS running, the notification is injected directly into history
+   * and the next model iteration sees it (mid-turn reactivation). */
+  onReactivate?: (notification: string) => void;
+
   constructor(config: AgentConfig) {
     this.config = config;
     this.model = new ModelClient(config);
     this.registry = new ToolRegistry();
     registerDefaultTools(this.registry);
     this.mcpManager = new McpManager();
+    if (this.config.sessionId && !this.config.isSubAgent) {
+      // Process-wide singleton — never replaced, so live sub-agents survive
+      // config/session changes. The session id is state inside the manager.
+      // Sub-agent workers are excluded: their construction inside spawn() must
+      // not refresh profiles or repoint the manager at their own session.
+      this.subAgentManager = getSubAgentManager(this.config.sessionId, this.config.subAgents, this.config.insecure === true, this.config.maxIterations, { skillsOptions: this.config.skillsOptions, activeSkills: this.config.activeSkills });
+      this.bindSubAgentComplete();
+    }
+  }
+
+  /** Push-based completion: react to finished workers instead of polling.
+   * Must run on every (re)acquisition of the manager — the CLI constructs the
+   * Agent before a session id exists and attaches it via setSessionId(). */
+  private bindSubAgentComplete(): void {
+    if (!this.subAgentManager) return;
+    this.subAgentManager.onSubAgentComplete = (s) => this.handleSubAgentComplete(s);
   }
 
   async init(): Promise<void> {
@@ -90,11 +117,23 @@ export class Agent {
   }
 
   setSessionId(id: string) {
+    if (this.config.sessionId === id && this.subAgentManager) {
+      return;
+    }
     this.config.sessionId = id;
+    if (id && !this.config.isSubAgent) {
+      // Singleton — repoints at the new session, keeps live agents running.
+      this.subAgentManager = getSubAgentManager(id, this.config.subAgents, this.config.insecure === true, this.config.maxIterations, { skillsOptions: this.config.skillsOptions, activeSkills: this.config.activeSkills });
+      this.bindSubAgentComplete();
+    }
   }
 
   getSessionId(): string | undefined {
     return this.config.sessionId;
+  }
+
+  getSubAgentManager(): SubAgentManager | undefined {
+    return this.subAgentManager;
   }
 
   setHistory(messages: Message[]) {
@@ -111,14 +150,67 @@ export class Agent {
 
   updateConfig(updates: Partial<AgentConfig>) {
     this.config = { ...this.config, ...updates };
-    // Re-initialize model client if the connection target changed
-    // (apiKey alone can differ between profiles on the same gateway)
-    if (updates.model || updates.endpoint || updates.apiKey) {
+    // Re-initialize model client if connection or auth targets changed
+    if (updates.model || updates.endpoint || updates.apiKey || updates.headers) {
       this.model = new ModelClient(this.config);
+    }
+    // Session changes repoint the manager; they never touch profiles.
+    if (updates.sessionId && !this.config.isSubAgent && this.config.sessionId) {
+      this.subAgentManager = getSubAgentManager(this.config.sessionId, undefined, this.config.insecure === true, this.config.maxIterations, { skillsOptions: this.config.skillsOptions, activeSkills: this.config.activeSkills });
+      this.bindSubAgentComplete();
+    }
+    // Strict rule: worker profiles are seeded at launch and replaced ONLY by
+    // an explicit profile switch (updateConfig carrying subAgents — the
+    // /profile command path). No other path may update them.
+    if (updates.subAgents !== undefined) {
+      this.subAgentManager?.updateProfiles(updates.subAgents);
+    }
+    // Skill activation changes (e.g. /skills toggle) propagate to the manager
+    // so workers spawned afterwards inherit the new active-skill set.
+    if (updates.activeSkills !== undefined && !this.config.isSubAgent) {
+      this.subAgentManager?.updateSkills({
+        skillsOptions: this.config.skillsOptions,
+        activeSkills: this.config.activeSkills,
+      });
     }
   }
 
   async run(
+    ...args: Parameters<Agent['runTurn']>
+  ): Promise<AgentResponse> {
+    this.runningTurn = true;
+    try {
+      return await this.runTurn(...args);
+    } finally {
+      this.runningTurn = false;
+    }
+  }
+
+  /** Sub-agent completion → notify the mentor. Mid-turn: injected into
+   * history so the very next model call sees it (a worker freed up — the
+   * mentor can allocate the next plan task right away). Idle: handed to the
+   * host via onReactivate to start a fresh turn. */
+  private handleSubAgentComplete(summary: import('./subagent/types.js').SubAgentSummary): void {
+    const detail =
+      summary.status === 'failed'
+        ? `FAILED${summary.error ? `: ${summary.error}` : ''}`
+        : 'COMPLETED';
+    const text =
+      `[SUB-AGENT ${detail}] "${summary.name}" (${summary.id})` +
+      `${summary.summary ? `\nSummary: ${summary.summary.slice(0, 2000)}` : ''}` +
+      `\nReact per your plan: assign follow-up work to the freed worker, inspect details with check_sub, or report to the user and finish.`;
+
+    if (this.runningTurn) {
+      // Mid-turn: append after the latest tool result — the next iteration
+      // of the model loop reads it (same mechanism as mentor directions).
+      this.messages.push({ role: 'user', content: text });
+      this.onHistoryChange?.();
+    } else {
+      this.onReactivate?.(text);
+    }
+  }
+
+  private async runTurn(
     userInput: string,
     onStep?: (step: AgentStep) => void,
     mode: 'agent' | 'chat' | 'plan' = 'agent',
@@ -366,6 +458,14 @@ GUIDANCE FOR PLAN EXECUTION:
             toolDefinitions = toolDefinitions.filter(d => 
               d.name.startsWith('mcp__') || allowedTools.includes(d.name)
             );
+          } else {
+            if (this.subAgentManager) {
+              toolDefinitions = toolDefinitions.filter(d => d.name !== 'ask_mentor');
+            } else {
+              toolDefinitions = toolDefinitions.filter(d => 
+                !['assign_task', 'check_sub', 'send_to_sub'].includes(d.name)
+              );
+            }
           }
         }
       }
@@ -465,6 +565,7 @@ GUIDANCE FOR PLAN EXECUTION:
           signal,
           onApproval,
           onAskUser,
+          subAgentManager: this.subAgentManager,
         });
 
         // ----------------------------------------------------------------
@@ -587,6 +688,14 @@ GUIDANCE FOR PLAN EXECUTION:
       if (mode === 'chat') {
         const allowedTools = ['read', 'list', 'grep'];
         definitions = definitions.filter(d => d.name.startsWith('mcp__') || allowedTools.includes(d.name));
+      } else {
+        if (this.subAgentManager) {
+          definitions = definitions.filter(d => d.name !== 'ask_mentor');
+        } else {
+          definitions = definitions.filter(d => 
+            !['assign_task', 'check_sub', 'send_to_sub'].includes(d.name)
+          );
+        }
       }
     }
     

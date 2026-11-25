@@ -19,13 +19,48 @@ export class ModelClient {
       this.agent = new https.Agent({
         rejectUnauthorized: false
       });
+      // Bun's Node compat layer ignores rejectUnauthorized on per-request
+      // https.Agent objects, so under Bun fall back to Bun.fetch's per-call
+      // `tls` option — this keeps the TLS skip scoped to this client only
+      // (no process-wide NODE_TLS_REJECT_UNAUTHORIZED).
+      const bun: any = (globalThis as any).Bun;
+      if (bun?.fetch) {
+        this.fetchImpl = ((url: string, init: any) =>
+          bun.fetch(url, { ...init, tls: { rejectUnauthorized: false } })) as typeof fetch;
+      }
     }
   }
+
+  /** fetch implementation used for model calls; Bun.fetch when an insecure
+   *  https endpoint needs a per-call tls override, node-fetch otherwise. */
+  private fetchImpl: typeof fetch = fetch;
 
   private combinedSignal(signal?: AbortSignal): AbortSignal {
     const signals: AbortSignal[] = [AbortSignal.timeout(this.timeoutMs)];
     if (signal) signals.push(signal);
     return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+  }
+
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (this.config.apiKey && this.config.apiKey !== 'none') {
+      headers['Authorization'] = `Bearer ${this.config.apiKey}`;
+    }
+
+    if (this.config.headers) {
+      for (const [key, value] of Object.entries(this.config.headers)) {
+        if (key.toLowerCase() === 'authorization') {
+          delete headers['Authorization'];
+        }
+        const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value);
+        headers[key] = match ? (process.env[match[1]] ?? value) : value;
+      }
+    }
+
+    return headers;
   }
 
   /**
@@ -121,12 +156,9 @@ export class ModelClient {
     const fetchStart = Date.now();
     let response;
     try {
-      response = await fetch(`${this.config.endpoint}/chat/completions`, {
+      response = await this.fetchImpl(`${this.config.endpoint}/chat/completions`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.config.apiKey || 'none'}`
-        },
+        headers: this.getHeaders(),
         body: JSON.stringify(payload),
         agent: this.agent,
         signal: this.combinedSignal(signal)
@@ -186,12 +218,9 @@ export class ModelClient {
     const callStart = Date.now();
     logInfo(`chatStreamed() — POST ${this.config.endpoint}/chat/completions, model=${this.config.model}, thinking=${this.config.thinkingLevel ?? 'off'}, messages=${messages.length}, tools=${payload.tools?.length ?? 0}, timeoutMs=${this.timeoutMs}`);
     logDebug(`chatStreamed() — outgoing payload: ${this.describePayload(payload)}`);
-    const response = await fetch(`${this.config.endpoint}/chat/completions`, {
+    const response = await this.fetchImpl(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey || 'none'}`,
-      },
+      headers: this.getHeaders(),
       body: JSON.stringify(payload),
       agent: this.agent,
       signal: this.combinedSignal(signal),
@@ -337,12 +366,9 @@ export class ModelClient {
     };
     applyThinking(payload, this.config);
     logDebug(`stream() — outgoing payload: ${this.describePayload(payload)}`);
-    const response = await fetch(`${this.config.endpoint}/chat/completions`, {
+    const response = await this.fetchImpl(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.config.apiKey || 'none'}`
-      },
+      headers: this.getHeaders(),
       agent: this.agent,
       signal: this.combinedSignal(signal),
       body: JSON.stringify(payload),

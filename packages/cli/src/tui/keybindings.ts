@@ -30,7 +30,9 @@ export type BindableAction =
   | 'sessionSwitcher'
   | 'abort'
   | 'yank'
-  | 'expand';
+  | 'expand'
+  | 'agentPanel'
+  | 'agentKill';
 
 /** Canonical key descriptor: modifiers + base key. */
 export interface KeyDescriptor {
@@ -49,6 +51,8 @@ export const DEFAULT_BINDINGS: Record<BindableAction, string> = {
   abort: 'escape',
   yank: 'y',
   expand: 'ctrl+e',
+  agentPanel: 'ctrl+g',
+  agentKill: 'ctrl+x',
 };
 
 /** Project-first (like agents.json): `<cwd>/.tiny-cli/keys.json` wins over the home copy. */

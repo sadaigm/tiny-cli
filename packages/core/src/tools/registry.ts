@@ -1,5 +1,6 @@
 import { ToolDefinition, ExecTarget } from '../types.js';
 import type { AskUserPayload, AskUserResponse } from '../types.js';
+import type { SubAgentManager } from '../subagent/manager.js';
 
 export type ToolContext = {
   sessionId?: string;
@@ -12,6 +13,8 @@ export type ToolContext = {
   profileName?: string;
   /** Interactive question channel (wired by Agent.run when the host provides onAskUser). */
   askUser?: (payload: AskUserPayload) => Promise<AskUserResponse>;
+  /** Sub-agent manager for spawning and monitoring sub-agents */
+  subAgentManager?: SubAgentManager;
 };
 
 export type ToolHandler = (args: any, context?: ToolContext) => Promise<string>;
